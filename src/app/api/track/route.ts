@@ -2,11 +2,11 @@ import { NextResponse } from 'next/server';
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
-  const waybill = searchParams.get('waybill');
+  const trackId = searchParams.get('waybill'); // We keep the param name 'waybill' so frontend doesn't break
 
-  if (!waybill) {
+  if (!trackId) {
     return NextResponse.json(
-      { error: 'Waybill parameter is required' },
+      { error: 'Tracking ID parameter is required' },
       { status: 400 }
     );
   }
@@ -14,7 +14,12 @@ export async function GET(request: Request) {
   try {
     const API_KEY = process.env.DELHIVERY_API_KEY || '046c1dda9a9bfb410a973b7fc24d583d65850f98';
     
-    const response = await fetch(`https://track.delhivery.com/api/v1/packages/json/?waybill=${waybill}`, {
+    // Delhivery uses 'waybill' for pure AWB numbers, and 'ref_ids' for Order IDs (like ORD008078).
+    // If the input is only numbers, it's an AWB. If it has letters, it's an Order ID.
+    const isAwb = /^\d+$/.test(trackId.trim());
+    const queryParam = isAwb ? `waybill=${trackId.trim()}` : `ref_ids=${trackId.trim()}`;
+    
+    const response = await fetch(`https://track.delhivery.com/api/v1/packages/json/?${queryParam}`, {
       headers: {
         'Authorization': `Token ${API_KEY}`,
         'Content-Type': 'application/json'
