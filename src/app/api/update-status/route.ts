@@ -2,10 +2,11 @@ import { NextResponse } from 'next/server';
 
 export async function POST(request: Request) {
   try {
-    const { orderId, newStatus } = await request.json();
+    const bodyData = await request.json();
+    const { orderId } = bodyData;
     
-    if (!orderId || !newStatus) {
-      return NextResponse.json({ error: 'Missing orderId or newStatus' }, { status: 400 });
+    if (!orderId) {
+      return NextResponse.json({ error: 'Missing orderId' }, { status: 400 });
     }
 
     const scriptUrl = process.env.APPS_SCRIPT_URL;
@@ -18,7 +19,7 @@ export async function POST(request: Request) {
       headers: {
         'Content-Type': 'text/plain', // Apps Script requires this to bypass CORS preflight often
       },
-      body: JSON.stringify({ orderId, newStatus })
+      body: JSON.stringify(bodyData)
     });
 
     const result = await response.json();

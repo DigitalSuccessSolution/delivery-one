@@ -20,6 +20,11 @@ export default function Dashboard() {
   
   // Modal State
   const [selectedOrder, setSelectedOrder] = useState<any | null>(null);
+  
+  // Debug State
+  const [debugInput, setDebugInput] = useState('');
+  const [debugJson, setDebugJson] = useState<any | null>(null);
+  const [isDebugLoading, setIsDebugLoading] = useState(false);
 
   const fetchSheet = async () => {
     setIsLoading(true);
@@ -41,12 +46,8 @@ export default function Dashboard() {
       setSheetData(data.data);
       setCurrentPage(1); // Reset to page 1 on new fetch
       
-      // Initialize fetching for statuses
-      data.data.forEach((row: any) => {
-        if (row._orderId && !liveStatuses[row._orderId]) {
-          fetchSingleStatus(row._orderId);
-        }
-      });
+      // Status fetching is now handled in the useEffect hook listening to sheetData changes
+
       
     } catch (err: any) {
       setError(err.message);
@@ -55,71 +56,119 @@ export default function Dashboard() {
     }
   };
 
-  const fetchSingleStatus = async (orderId: string) => {
-    try {
-      const res = await fetch(`/api/track?waybill=${encodeURIComponent(orderId)}`);
-      const data = await res.json();
-      let statusObj = { status: 'Not Found', instructions: '', firstAttempt: null, callPlaced: false };
-      if (!data.Error && !data.error && data.ShipmentData?.[0]?.Shipment) {
-        const shipment = data.ShipmentData[0].Shipment;
+  const fetchBatchStatuses = async (orderIds: string[]) => {
+    if (!orderIds.length) return;
+    
+    // Batch into chunks of 50 (Delhivery limit usually 50)
+    const chunkSize = 50;
+    for (let i = 0; i < orderIds.length; i += chunkSize) {
+      const chunk = orderIds.slice(i, i + chunkSize);
+      
+      try {
+        const res = await fetch(`/api/track?waybill=${encodeURIComponent(chunk.join(','))}`);
+        const data = await res.json();
         
-        let hasCallPlaced = false;
-        if (shipment.Status?.Instructions?.toLowerCase().includes('call placed')) hasCallPlaced = true;
-        if (shipment.Scans && Array.isArray(shipment.Scans)) {
-          if (shipment.Scans.some((s:any) => s.ScanDetail?.Instructions?.toLowerCase().includes('call placed'))) {
-             hasCallPlaced = true;
-          }
-        }
+        const newStatuses: Record<string, any> = {};
+        
+        if (data.ShipmentData && Array.isArray(data.ShipmentData)) {
+          data.ShipmentData.forEach((item: any) => {
+            const shipment = item.Shipment;
+            if (!shipment) return;
+            
+            const orderIdMatch = chunk.find(id => id === shipment.AWB || id === shipment.ReferenceNo);
+            
+            if (orderIdMatch) {
+              let hasCallPlaced = false;
+              let ofdCount = 0;
+              
+              if (shipment.Status?.Instructions?.toLowerCase().includes('call placed')) hasCallPlaced = true;
+              if (shipment.Scans && Array.isArray(shipment.Scans)) {
+                shipment.Scans.forEach((s:any) => {
+                  if (s.ScanDetail?.Instructions?.toLowerCase().includes('call placed')) hasCallPlaced = true;
+                  
+                  const instr = (s.ScanDetail?.Instructions || '').toLowerCase();
+                  const stat = (s.ScanDetail?.Status || '').toLowerCase();
+                  if (instr.includes('out for delivery') || stat.includes('out for delivery')) {
+                    ofdCount++;
+                  }
+                });
+              }
+              
+              if (ofdCount === 0) {
+                 const instr = (shipment.Status?.Instructions || '').toLowerCase();
+                 const stat = (shipment.Status?.Status || '').toLowerCase();
+                 if (instr.includes('out for delivery') || stat.includes('out for delivery')) {
+                   ofdCount = 1;
+                 }
+              }
 
-        statusObj = {
-          status: shipment.Status?.Status || 'Unknown',
-          instructions: shipment.Status?.Instructions || '',
-          firstAttempt: shipment.FirstAttemptDate || null,
-          callPlaced: hasCallPlaced
-        };
+              newStatuses[orderIdMatch] = {
+                status: shipment.Status?.Status || 'Unknown',
+                statusType: shipment.Status?.StatusType || '',
+                instructions: shipment.Status?.Instructions || '',
+                firstAttempt: shipment.FirstAttemptDate || null,
+                callPlaced: hasCallPlaced,
+                ofdCount: ofdCount,
+                rawShipment: shipment
+              };
+            }
+          });
+        }
+        
+        chunk.forEach(id => {
+          if (!newStatuses[id]) {
+            newStatuses[id] = { status: 'Not Found/Error', statusType: '', instructions: '', firstAttempt: null, callPlaced: false, ofdCount: 0 };
+          }
+        });
+        
+        setLiveStatuses(prev => ({ ...prev, ...newStatuses }));
+      } catch (e) {
+        const errorStatuses: Record<string, any> = {};
+        chunk.forEach(id => {
+          errorStatuses[id] = { status: 'Error', statusType: '', instructions: '', firstAttempt: null, callPlaced: false, ofdCount: 0 };
+        });
+        setLiveStatuses(prev => ({ ...prev, ...errorStatuses }));
       }
-      setLiveStatuses(prev => ({ ...prev, [orderId]: statusObj }));
-    } catch (e) {
-      setLiveStatuses(prev => ({ ...prev, [orderId]: { status: 'Error', instructions: '', firstAttempt: null } }));
     }
   };
 
-  // 10 Second Polling
+  const fetchAllStatuses = (data: any[]) => {
+    const allIds = data.map(row => row._orderId).filter(Boolean);
+    fetchBatchStatuses(allIds);
+  };
+
+  // Run on mount
   useEffect(() => {
     fetchSheet();
-    const interval = setInterval(() => {
-      // Re-fetch statuses for all orders currently loaded
-      sheetData.forEach(row => {
-        if (row._orderId) fetchSingleStatus(row._orderId);
-      });
-    }, 10000);
-    return () => clearInterval(interval);
-  }, []); // Note: leaving dependency array empty so it only mounts once, but captures sheetData via closure - actually sheetData won't be captured.
-  // We need a ref or just let the interval use the latest state. To simplify, we'll re-bind the interval when sheetData changes.
+  }, []);
 
+  // 10 Second Polling
   useEffect(() => {
+    if (sheetData.length === 0) return;
+    
+    // Initial fetch when sheetData is first populated
+    fetchAllStatuses(sheetData);
+    
     const interval = setInterval(() => {
-      sheetData.forEach(row => {
-        if (row._orderId) fetchSingleStatus(row._orderId);
-      });
+      fetchAllStatuses(sheetData);
     }, 10000);
+    
     return () => clearInterval(interval);
   }, [sheetData]);
 
-  const handleInternalStatusChange = async (orderId: string, newStatus: string) => {
+  const handleUpdate = async (orderId: string, updates: any) => {
     // Optimistic UI update
-    setSheetData(prev => prev.map(r => r._orderId === orderId ? { ...r, _internalStatus: newStatus } : r));
+    setSheetData(prev => prev.map(r => r._orderId === orderId ? { ...r, ...updates } : r));
     
     try {
       const res = await fetch('/api/update-status', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ orderId, newStatus })
+        body: JSON.stringify({ orderId, ...updates })
       });
       const data = await res.json();
       if (!data.success) {
         alert("Failed to update Sheet: " + (data.error || 'Unknown Error. Have you configured APPS_SCRIPT_URL?'));
-        // fetchSheet(); // reload to reset
       }
     } catch (e) {
       alert("Error updating sheet.");
@@ -127,12 +176,54 @@ export default function Dashboard() {
   };
 
   const getStatusBadge = (s: any) => {
-    const statusText = typeof s === 'string' ? s : s?.status;
-    if (!statusText) return <span className="flex items-center gap-1.5 text-slate-400 text-xs font-semibold whitespace-nowrap"><RefreshCw className="w-3 h-3 animate-spin" /> Fetching...</span>;
-    const lower = statusText.toLowerCase();
-    if (lower.includes('out for delivery') || lower.includes('delivered')) return <span className="bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-3 py-1 rounded-full text-xs font-bold whitespace-nowrap">{statusText}</span>;
-    if (lower.includes('transit')) return <span className="bg-amber-500/10 text-amber-400 border border-amber-500/20 px-3 py-1 rounded-full text-xs font-bold whitespace-nowrap">{statusText}</span>;
-    return <span className="bg-slate-800 text-slate-300 border border-slate-700 px-3 py-1 rounded-full text-xs font-bold whitespace-nowrap">{statusText}</span>;
+    if (!s || s.status === 'Not Found' || s.status === 'Error') {
+      return <span className="flex items-center gap-1.5 text-slate-400 text-xs font-semibold whitespace-nowrap"><RefreshCw className="w-3 h-3 animate-spin" /> Fetching/Error...</span>;
+    }
+    if (!s.status) {
+       return <span className="flex items-center gap-1.5 text-slate-400 text-xs font-semibold whitespace-nowrap"><RefreshCw className="w-3 h-3 animate-spin" /> Fetching...</span>;
+    }
+
+    const rawStatus = (s.status || '').toLowerCase().trim();
+    const rawType = (s.statusType || '').toUpperCase().trim();
+    
+    let displayStatus = s.status;
+    let badgeColor = "bg-slate-800 text-slate-300 border-slate-700";
+
+    if (rawStatus === 'dispatched' && rawType === 'UD') {
+      displayStatus = 'OFD';
+      badgeColor = "bg-indigo-500/10 text-indigo-400 border-indigo-500/20";
+    } else if (rawStatus === 'in transit' && rawType === 'RT') {
+      displayStatus = 'RTO In transit';
+      badgeColor = "bg-orange-500/10 text-orange-400 border-orange-500/20";
+    } else if (rawStatus === 'delivered' && rawType === 'DL') {
+      displayStatus = 'Delivered';
+      badgeColor = "bg-emerald-500/10 text-emerald-400 border-emerald-500/20";
+    } else if (rawStatus === 'manifested' && rawType === 'UD') {
+      displayStatus = 'Ready to Pickup';
+      badgeColor = "bg-blue-500/10 text-blue-400 border-blue-500/20";
+    } else if (rawStatus === 'in transit' && rawType === 'UD') {
+      displayStatus = 'In transit';
+      badgeColor = "bg-amber-500/10 text-amber-400 border-amber-500/20";
+    } else if (rawStatus === 'rto' && rawType === 'DL') {
+      displayStatus = 'RTO- Returned';
+      badgeColor = "bg-red-500/10 text-red-400 border-red-500/20";
+    } else if (rawStatus.includes('lost') || rawStatus.includes('cancel')) {
+      displayStatus = 'Lost';
+      badgeColor = "bg-red-900/40 text-red-400 border-red-500/30";
+    } else {
+      // Fallback
+      if (rawStatus.includes('out for delivery') || rawStatus.includes('delivered')) {
+        badgeColor = "bg-emerald-500/10 text-emerald-400 border-emerald-500/20";
+      } else if (rawStatus.includes('transit')) {
+        badgeColor = "bg-amber-500/10 text-amber-400 border-amber-500/20";
+      }
+    }
+
+    return (
+      <span className={`px-3 py-1 rounded-full text-[11px] font-bold whitespace-nowrap border ${badgeColor}`}>
+        {displayStatus}
+      </span>
+    );
   };
 
   // Filter Data
@@ -159,6 +250,22 @@ export default function Dashboard() {
     }
   };
 
+  const handleDebugSearch = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!debugInput.trim()) return;
+    setIsDebugLoading(true);
+    setDebugJson(null);
+    try {
+      const res = await fetch(`/api/track?waybill=${encodeURIComponent(debugInput.trim())}`);
+      const data = await res.json();
+      setDebugJson(data);
+    } catch (err: any) {
+      setDebugJson({ error: err.message });
+    } finally {
+      setIsDebugLoading(false);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-[#020617] text-slate-200 p-4 md:p-8 font-sans">
       <div className="max-w-[1600px] mx-auto space-y-8">
@@ -180,6 +287,25 @@ export default function Dashboard() {
           </div>
           
           <div className="flex items-center gap-4">
+            
+            {/* Debug Form */}
+            <form onSubmit={handleDebugSearch} className="flex items-center gap-2 bg-slate-900 border border-slate-700 rounded-xl px-2 py-1.5">
+              <input 
+                type="text" 
+                placeholder="Debug Order ID..." 
+                value={debugInput}
+                onChange={e => setDebugInput(e.target.value)}
+                className="bg-transparent text-sm text-slate-200 focus:outline-none w-32 px-2"
+              />
+              <button 
+                type="submit" 
+                disabled={isDebugLoading}
+                className="bg-indigo-600 hover:bg-indigo-500 text-white p-1.5 rounded-lg disabled:opacity-50"
+              >
+                <Search className={`w-4 h-4 ${isDebugLoading ? 'animate-spin' : ''}`} />
+              </button>
+            </form>
+
             {/* Filter Dropdown */}
             <div className="flex items-center gap-2 bg-slate-900 border border-slate-700 rounded-xl px-3 py-2">
               <Filter className="w-4 h-4 text-indigo-400" />
@@ -244,22 +370,38 @@ export default function Dashboard() {
               <table className="w-full text-left border-collapse min-w-[1200px]">
                 <thead>
                   <tr className="bg-slate-900/80 border-b border-slate-700/50">
-                    <th className="py-4 px-5 font-bold text-indigo-400 text-xs uppercase tracking-wider bg-indigo-900/10 border-r border-slate-800/50 shadow-inner">
+                    <th className="py-2 px-3 font-bold text-indigo-400 text-xs uppercase tracking-wider bg-indigo-900/10 border-r border-slate-800/50 shadow-inner">
                       Delhivery Status
                     </th>
-                    {headers.map((h, i) => (
-                      <React.Fragment key={i}>
-                        <th className="py-4 px-5 font-semibold text-slate-400 text-xs uppercase tracking-wider whitespace-nowrap">
-                          {h || `Column ${i+1}`}
-                        </th>
-                        {h.toLowerCase().includes('order date') && (
-                          <th className="py-4 px-5 font-bold text-indigo-300 text-xs uppercase tracking-wider bg-indigo-900/10 whitespace-nowrap">
-                            First Attempt
+                    {headers.map((h, i) => {
+                      const hLower = (h || '').toLowerCase();
+                      if (hLower.includes('order date') || hLower.includes('product')) return null;
+                      
+                      return (
+                        <React.Fragment key={i}>
+                          <th className="py-2 px-3 font-semibold text-slate-400 text-[11px] uppercase tracking-wider whitespace-nowrap">
+                            {h || `Column ${i+1}`}
                           </th>
-                        )}
-                      </React.Fragment>
-                    ))}
-                    <th className="py-4 px-5 font-bold text-emerald-400 text-xs uppercase tracking-wider bg-emerald-900/10 border-l border-slate-800/50 text-center">
+                          {i === 0 && (
+                            <>
+                              <th className="py-2 px-3 font-bold text-indigo-300 text-[11px] uppercase tracking-wider bg-indigo-900/10 whitespace-nowrap">
+                                Instructions
+                              </th>
+                              <th className="py-2 px-3 font-bold text-indigo-300 text-[11px] uppercase tracking-wider bg-indigo-900/10 whitespace-nowrap border-r border-slate-800/50">
+                                First Attempt
+                              </th>
+                            </>
+                          )}
+                        </React.Fragment>
+                      );
+                    })}
+                    <th className="py-2 px-3 font-bold text-amber-400 text-[11px] uppercase tracking-wider bg-slate-900/40 border-l border-slate-800/50 text-center w-[100px]">
+                      Discount
+                    </th>
+                    <th className="py-2 px-3 font-bold text-amber-400 text-[11px] uppercase tracking-wider bg-slate-900/40 border-l border-slate-800/50 text-center w-[150px]">
+                      Remark
+                    </th>
+                    <th className="py-2 px-3 font-bold text-emerald-400 text-[11px] uppercase tracking-wider bg-emerald-900/10 border-l border-slate-800/50 text-center">
                       Internal Status
                     </th>
                   </tr>
@@ -268,28 +410,34 @@ export default function Dashboard() {
                   {paginatedData.map((row, idx) => (
                     <tr key={idx} className="hover:bg-slate-800/40 transition-colors group">
                       
-                      <td className="py-4 px-5 border-r border-slate-800/50 bg-slate-900/20 w-[180px]">
+                      <td className="py-2 px-3 border-r border-slate-800/50 bg-slate-900/20 w-[180px]">
                         {getStatusBadge(liveStatuses[row._orderId])}
                       </td>
                       
                       {headers.map((h, i) => {
+                        const hLower = (h || '').toLowerCase();
+                        if (hLower.includes('order date') || hLower.includes('product')) return null;
+                        
                         const callPlaced = liveStatuses[row._orderId]?.callPlaced;
-                        const isCustomerCol = h.toLowerCase() === 'customer';
-                        const hLower = h.toLowerCase();
+                        const isCustomerCol = hLower === 'customer';
                         
                         let widthClass = "max-w-[150px]"; // Default
                         if (hLower.includes('received') || hLower.includes('cod') || hLower.includes('price')) widthClass = "max-w-[90px]";
-                        if (hLower.includes('product')) widthClass = "max-w-[120px]";
 
                         return (
                           <React.Fragment key={i}>
-                            <td className="py-4 px-5">
+                            <td className="py-2 px-3">
                               {i === 0 ? (
                                 <button 
                                   onClick={() => setSelectedOrder(row)}
-                                  className="text-indigo-400 font-bold font-mono text-sm hover:text-indigo-300 transition-colors hover:underline"
+                                  className="text-indigo-400 font-bold font-mono text-sm hover:text-indigo-300 transition-colors hover:underline text-left"
                                 >
                                   {row[h] || '-'}
+                                  {typeof liveStatuses[row._orderId]?.ofdCount === 'number' && (
+                                    <span className="text-amber-400 font-bold ml-1">
+                                      - ({liveStatuses[row._orderId].ofdCount})
+                                    </span>
+                                  )}
                                 </button>
                               ) : (
                                 <div className="flex items-center gap-2">
@@ -302,22 +450,51 @@ export default function Dashboard() {
                                 </div>
                               )}
                             </td>
-                            {h.toLowerCase().includes('order date') && (
-                              <td className="py-4 px-5 bg-indigo-900/5">
-                                <div className="text-sm font-semibold text-indigo-200 whitespace-nowrap">
-                                  {formatDate(liveStatuses[row._orderId]?.firstAttempt) || '-'}
-                                </div>
-                              </td>
+                            {i === 0 && (
+                              <>
+                                <td className="py-2 px-3 bg-indigo-900/5 border-r border-slate-800/50">
+                                  <div className="text-sm font-medium text-slate-300 max-w-[180px] line-clamp-2" title={liveStatuses[row._orderId]?.instructions}>
+                                    {liveStatuses[row._orderId]?.instructions || '-'}
+                                  </div>
+                                </td>
+                                <td className="py-2 px-3 bg-indigo-900/5 border-r border-slate-800/50">
+                                  <div className="text-sm font-semibold text-indigo-200 whitespace-nowrap">
+                                    {formatDate(liveStatuses[row._orderId]?.firstAttempt) || '-'}
+                                  </div>
+                                </td>
+                              </>
                             )}
                           </React.Fragment>
                         );
                       })}
 
-                      <td className="py-4 px-5 border-l border-slate-800/50 bg-slate-900/20">
+                      <td className="py-2 px-3 border-l border-slate-800/50 bg-slate-900/20">
+                        <input 
+                          type="number"
+                          value={row.discount || ''}
+                          onChange={(e) => setSheetData(prev => prev.map(r => r._orderId === row._orderId ? { ...r, discount: e.target.value } : r))}
+                          onBlur={(e) => handleUpdate(row._orderId, { discount: e.target.value })}
+                          placeholder="Amount"
+                          className="w-full bg-[#0a0f1d] border border-slate-700 rounded-lg text-sm text-slate-300 p-1.5 focus:ring-1 focus:ring-amber-500 outline-none"
+                        />
+                      </td>
+
+                      <td className="py-2 px-3 border-l border-slate-800/50 bg-slate-900/20">
+                        <input 
+                          type="text"
+                          value={row.remark || ''}
+                          onChange={(e) => setSheetData(prev => prev.map(r => r._orderId === row._orderId ? { ...r, remark: e.target.value } : r))}
+                          onBlur={(e) => handleUpdate(row._orderId, { remark: e.target.value })}
+                          placeholder="Remark..."
+                          className="w-full bg-[#0a0f1d] border border-slate-700 rounded-lg text-sm text-slate-300 p-1.5 focus:ring-1 focus:ring-amber-500 outline-none"
+                        />
+                      </td>
+
+                      <td className="py-2 px-3 border-l border-slate-800/50 bg-slate-900/20">
                         <select 
                           value={row._internalStatus || ''}
-                          onChange={(e) => handleInternalStatusChange(row._orderId, e.target.value)}
-                          className="w-full bg-[#0a0f1d] border border-slate-700 rounded-lg text-sm text-slate-300 p-2 focus:ring-2 focus:ring-emerald-500 outline-none cursor-pointer"
+                          onChange={(e) => handleUpdate(row._orderId, { _internalStatus: e.target.value })}
+                          className="w-full bg-[#0a0f1d] border border-slate-700 rounded-lg text-sm text-slate-300 p-1.5 focus:ring-1 focus:ring-emerald-500 outline-none cursor-pointer"
                         >
                           <option className="bg-slate-900 text-slate-200" value="">-- Action --</option>
                           <option className="bg-slate-900 text-slate-200" value="Yes">Yes</option>
@@ -392,13 +569,72 @@ export default function Dashboard() {
               </div>
               
               <div className="p-6 max-h-[70vh] overflow-y-auto">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                {selectedOrder && liveStatuses[selectedOrder._orderId]?.rawShipment && (
+                  <div className="mb-6 bg-indigo-900/20 border border-indigo-500/30 rounded-xl p-5 shadow-lg">
+                    <h4 className="text-lg font-bold text-indigo-300 mb-4 flex items-center gap-2 border-b border-indigo-500/20 pb-3">
+                      <Truck className="w-5 h-5" /> Live Tracking Details
+                    </h4>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                      {/* Sheet Data injected at the top of modal */}
+                      {Object.keys(selectedOrder).find(k => k.toLowerCase() === 'order date') && (
+                        <div>
+                          <p className="text-[10px] font-bold text-emerald-400/70 uppercase tracking-wider mb-1">Order Date</p>
+                          <p className="text-lg font-bold text-emerald-100">{formatDate(selectedOrder[Object.keys(selectedOrder).find(k => k.toLowerCase() === 'order date') as string])}</p>
+                        </div>
+                      )}
+                      {Object.keys(selectedOrder).find(k => k.toLowerCase() === 'product') && (
+                        <div>
+                          <p className="text-[10px] font-bold text-emerald-400/70 uppercase tracking-wider mb-1">Product</p>
+                          <p className="text-lg font-bold text-emerald-100 truncate" title={selectedOrder[Object.keys(selectedOrder).find(k => k.toLowerCase() === 'product') as string]}>
+                            {selectedOrder[Object.keys(selectedOrder).find(k => k.toLowerCase() === 'product') as string]}
+                          </p>
+                        </div>
+                      )}
+                      
+                      {liveStatuses[selectedOrder._orderId].rawShipment.PickUpDate && (
+                        <div>
+                          <p className="text-[10px] font-bold text-indigo-400/70 uppercase tracking-wider mb-1">Pickup Date</p>
+                          <p className="text-lg font-bold text-indigo-100">{formatDate(liveStatuses[selectedOrder._orderId].rawShipment.PickUpDate)}</p>
+                        </div>
+                      )}
+                      {liveStatuses[selectedOrder._orderId].rawShipment.ExpectedDeliveryDate && (
+                        <div>
+                          <p className="text-[10px] font-bold text-indigo-400/70 uppercase tracking-wider mb-1">Expected Delivery</p>
+                          <p className="text-lg font-bold text-indigo-100">{formatDate(liveStatuses[selectedOrder._orderId].rawShipment.ExpectedDeliveryDate)}</p>
+                        </div>
+                      )}
+                      {liveStatuses[selectedOrder._orderId].rawShipment.Destination && (
+                        <div>
+                          <p className="text-[10px] font-bold text-indigo-400/70 uppercase tracking-wider mb-1">Destination</p>
+                          <p className="text-base font-bold text-indigo-100">{liveStatuses[selectedOrder._orderId].rawShipment.Destination}</p>
+                        </div>
+                      )}
+                      {liveStatuses[selectedOrder._orderId].rawShipment.Status?.StatusLocation && (
+                        <div>
+                          <p className="text-[10px] font-bold text-indigo-400/70 uppercase tracking-wider mb-1">Current Location</p>
+                          <p className="text-base font-bold text-indigo-100">{liveStatuses[selectedOrder._orderId].rawShipment.Status.StatusLocation}</p>
+                        </div>
+                      )}
+                      {liveStatuses[selectedOrder._orderId].rawShipment.Status?.Instructions && (
+                        <div className="col-span-1 md:col-span-2 bg-indigo-950/40 p-3 rounded-lg border border-indigo-500/20 mt-2">
+                          <p className="text-[10px] font-bold text-indigo-400/70 uppercase tracking-wider mb-1">Latest Instructions</p>
+                          <p className="text-base font-bold text-indigo-100">{liveStatuses[selectedOrder._orderId].rawShipment.Status.Instructions}</p>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+                
+                <h4 className="text-sm font-bold text-slate-400 mb-4 flex items-center gap-2">
+                  <Database className="w-4 h-4" /> Sheet Data
+                </h4>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   
                   {Object.entries(selectedOrder._popupData).map(([key, value]) => {
                     if(!key) return null;
                     return (
-                      <div key={key} className="bg-slate-900/50 p-4 rounded-xl border border-slate-800">
-                        <p className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5">{key}</p>
+                      <div key={key} className="bg-slate-900/50 p-3 rounded-xl border border-slate-800">
+                        <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">{key}</p>
                         <p className="text-sm text-slate-200 font-medium break-words">
                           {value ? String(value) : '-'}
                         </p>
@@ -418,6 +654,23 @@ export default function Dashboard() {
                 <button onClick={() => setSelectedOrder(null)} className="bg-indigo-600 hover:bg-indigo-500 px-6 py-2 rounded-xl font-bold text-white transition-colors">
                   Close
                 </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Debug JSON Modal */}
+        {debugJson && (
+          <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-[60] flex items-center justify-center p-4">
+            <div className="bg-[#0a0f1d] border border-slate-700 rounded-2xl w-full max-w-4xl shadow-2xl overflow-hidden flex flex-col max-h-[85vh]">
+              <div className="flex items-center justify-between p-4 border-b border-slate-800 bg-slate-900">
+                <h3 className="text-lg font-bold text-indigo-300">Raw JSON: {debugInput}</h3>
+                <button onClick={() => setDebugJson(null)} className="p-1.5 hover:bg-slate-800 rounded-xl text-slate-400">
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+              <div className="p-4 overflow-auto flex-1 bg-black text-emerald-400 font-mono text-[11px] leading-tight">
+                <pre>{JSON.stringify(debugJson, null, 2)}</pre>
               </div>
             </div>
           </div>

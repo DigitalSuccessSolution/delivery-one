@@ -14,20 +14,47 @@ export async function GET(request: Request) {
   try {
     const API_KEY = process.env.DELHIVERY_API_KEY || '046c1dda9a9bfb410a973b7fc24d583d65850f98';
     
-    // Delhivery uses 'waybill' for pure AWB numbers, and 'ref_ids' for Order IDs (like ORD008078).
-    // If the input is only numbers, it's an AWB. If it has letters, it's an Order ID.
-    const isAwb = /^\d+$/.test(trackId.trim());
-    const queryParam = isAwb ? `waybill=${trackId.trim()}` : `ref_ids=${trackId.trim()}`;
+    const ids = trackId.split(',').map(id => id.trim()).filter(Boolean);
+    const awbs = ids.filter(id => /^\d+$/.test(id));
+    const refIds = ids.filter(id => !/^\d+$/.test(id));
     
-    const response = await fetch(`https://track.delhivery.com/api/v1/packages/json/?${queryParam}`, {
-      headers: {
-        'Authorization': `Token ${API_KEY}`,
-        'Content-Type': 'application/json'
+    let allShipments: any[] = [];
+    
+    if (awbs.length > 0) {
+      const queryParam = `waybill=${awbs.join(',')}`;
+      const response = await fetch(`https://track.delhivery.com/api/v1/packages/json/?${queryParam}`, {
+        headers: {
+          'Authorization': `Token ${API_KEY}`,
+          'Content-Type': 'application/json'
+        }
+      });
+      const text = await response.text();
+      try {
+        const data = JSON.parse(text);
+        if (data.ShipmentData) allShipments = allShipments.concat(data.ShipmentData);
+      } catch (e) {
+        console.error("Failed to parse Delhivery AWB response:", text.substring(0, 100));
       }
-    });
+    }
 
-    const data = await response.json();
-    return NextResponse.json(data);
+    if (refIds.length > 0) {
+      const queryParam = `ref_ids=${refIds.join(',')}`;
+      const response = await fetch(`https://track.delhivery.com/api/v1/packages/json/?${queryParam}`, {
+        headers: {
+          'Authorization': `Token ${API_KEY}`,
+          'Content-Type': 'application/json'
+        }
+      });
+      const text = await response.text();
+      try {
+        const data = JSON.parse(text);
+        if (data.ShipmentData) allShipments = allShipments.concat(data.ShipmentData);
+      } catch (e) {
+        console.error("Failed to parse Delhivery RefId response:", text.substring(0, 100));
+      }
+    }
+
+    return NextResponse.json({ ShipmentData: allShipments });
   } catch (error) {
     console.error('Error fetching from Delhivery API:', error);
     return NextResponse.json(
