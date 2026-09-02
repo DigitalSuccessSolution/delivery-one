@@ -1,13 +1,15 @@
 'use client';
 
 import React, { useState, useEffect, useCallback } from 'react';
-import { Package, Search, Truck, Database, AlertCircle, RefreshCw, FileSpreadsheet, Lock, X, Edit2, Filter, Wallet, Settings } from 'lucide-react';
+import { Package, Search, Truck, Database, AlertCircle, RefreshCw, FileSpreadsheet, Lock, X, Edit2, Filter, Wallet, Settings, Loader2 } from 'lucide-react';
 import Link from 'next/link';
+import Papa from 'papaparse';
 
 export default function Dashboard() {
   const [sheetData, setSheetData] = useState<any[]>([]);
   const [headers, setHeaders] = useState<string[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [isPolling, setIsPolling] = useState(false);
   const [error, setError] = useState('');
   const [isPrivate, setIsPrivate] = useState(false);
   
@@ -29,15 +31,20 @@ export default function Dashboard() {
 
   // Wallet
   const [walletBalance, setWalletBalance] = useState<number | null>(null);
+  const [isWalletLoading, setIsWalletLoading] = useState(false);
+  
   const fetchWalletBalance = async () => {
+    setIsWalletLoading(true);
     try {
-      const res = await fetch('/api/wallet');
+      const res = await fetch(`/api/wallet?_t=${Date.now()}`);
       const data = await res.json();
       if (data.success) {
         setWalletBalance(data.balance);
       }
     } catch (e) {
       console.error(e);
+    } finally {
+      setIsWalletLoading(false);
     }
   };
 
@@ -47,7 +54,7 @@ export default function Dashboard() {
     setIsPrivate(false);
     
     try {
-      const res = await fetch('/api/sheet');
+      const res = await fetch(`/api/sheet?_t=${Date.now()}`);
       const data = await res.json();
       
       if (!res.ok || !data.success) {
@@ -62,7 +69,7 @@ export default function Dashboard() {
       setCurrentPage(1); // Reset to page 1 on new fetch
       
       // Status fetching is now handled in the useEffect hook listening to sheetData changes
-
+      fetchWalletBalance();
       
     } catch (err: any) {
       setError(err.message);
@@ -73,6 +80,7 @@ export default function Dashboard() {
 
   const fetchBatchStatuses = async (orderIds: string[]) => {
     if (!orderIds.length) return;
+    setIsPolling(true);
     
     // Batch into chunks of 50 (Delhivery limit usually 50)
     const chunkSize = 50;
@@ -169,6 +177,8 @@ export default function Dashboard() {
         setLiveStatuses(prev => ({ ...prev, ...errorStatuses }));
       }
     }
+    
+    setIsPolling(false);
   };
 
   const fetchAllStatuses = (data: any[]) => {
@@ -191,6 +201,7 @@ export default function Dashboard() {
     
     const interval = setInterval(() => {
       fetchAllStatuses(sheetData);
+      fetchWalletBalance();
     }, 10000);
     
     return () => clearInterval(interval);
@@ -293,6 +304,60 @@ export default function Dashboard() {
     return mappedStatus === filterStatus;
   });
 
+  const exportToCSV = () => {
+    const exportData = displayedData.map(row => {
+      const newRow: Record<string, any> = {};
+      
+      // Standard headers
+      headers.slice(0, 8).forEach(h => {
+         newRow[h] = row[h];
+      });
+      
+      const statObj = liveStatuses[row._orderId];
+      newRow['Tracking Status'] = statObj?.status || '';
+      newRow['Tracking Instructions'] = statObj?.instructions || '';
+      newRow['First Attempt'] = formatDate(statObj?.firstAttempt) || '';
+      newRow['OFD Date'] = formatDate(statObj?.ofdDate) || '';
+      newRow['AT Count'] = statObj?.ofdCount || 0;
+      
+      // Popup data
+      const popupKeys = Object.keys(row._popupData || {});
+      popupKeys.forEach(k => {
+         if (k.trim() === '') return; // Skip empty header columns
+         if (!newRow.hasOwnProperty(k)) {
+            // Use dynamically edited values if they exist, otherwise fallback to original sheet data
+            const keyLower = k.toLowerCase().trim();
+            if (keyLower === 'discount') {
+               newRow[k] = row.discount !== undefined ? row.discount : row._popupData[k];
+            } else if (keyLower === 'remark') {
+               newRow[k] = row.remark !== undefined ? row.remark : row._popupData[k];
+            } else if (keyLower === 'internal status' || keyLower === 'status') {
+               newRow[k] = row._internalStatus !== undefined ? row._internalStatus : row._popupData[k];
+            } else {
+               newRow[k] = row._popupData[k];
+            }
+         }
+      });
+      
+      // Just in case these columns didn't exist in the sheet at all
+      if (!newRow.hasOwnProperty('Discount')) newRow['Discount'] = row.discount || '';
+      if (!newRow.hasOwnProperty('Remark')) newRow['Remark'] = row.remark || '';
+      if (!newRow.hasOwnProperty('Internal Status')) newRow['Internal Status'] = row._internalStatus || '';
+
+      return newRow;
+    });
+
+    const csv = Papa.unparse(exportData);
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.setAttribute("href", url);
+    link.setAttribute("download", `ofd_export_${new Date().toISOString().split('T')[0]}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
   const totalPages = Math.ceil(displayedData.length / itemsPerPage) || 1;
   const paginatedData = displayedData.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
 
@@ -338,6 +403,7 @@ export default function Dashboard() {
               </h1>
               <p className="text-slate-400 mt-1.5 text-sm font-medium flex items-center gap-2">
                 Google Sheets Sync <span className="w-1 h-1 bg-slate-600 rounded-full"></span> Live 10s Delhivery Polling
+                {isPolling && <RefreshCw className="w-3 h-3 text-indigo-400 animate-spin ml-1" />}
               </p>
             </div>
           </div>
@@ -349,8 +415,9 @@ export default function Dashboard() {
               <Wallet className="w-5 h-5 text-emerald-400" />
               <div>
                 <p className="text-[10px] font-bold text-emerald-400/80 uppercase tracking-wider leading-none">Wallet Balance</p>
-                <p className="text-lg font-black text-emerald-300 leading-none mt-1">
+                <p className="text-lg font-black text-emerald-300 leading-none mt-1 flex items-center gap-1.5">
                   {walletBalance !== null ? `₹${walletBalance.toLocaleString()}` : '...'}
+                  {isWalletLoading && walletBalance !== null && <Loader2 className="w-3.5 h-3.5 animate-spin text-emerald-400/60" />}
                 </p>
               </div>
             </div>
@@ -396,14 +463,24 @@ export default function Dashboard() {
               </select>
             </div>
             
-            <button 
-              onClick={fetchSheet}
-              disabled={isLoading}
-              className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white px-5 py-2.5 rounded-xl text-sm font-bold transition-all disabled:opacity-50"
-            >
-              <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} />
-              Manual Sync
-            </button>
+            <div className="flex items-center gap-2">
+              <button 
+                onClick={exportToCSV}
+                className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-500 text-white px-4 py-2 rounded-xl text-sm font-bold transition-all disabled:opacity-50"
+              >
+                <FileSpreadsheet className="w-4 h-4" />
+                Export
+              </button>
+              
+              <button 
+                onClick={fetchSheet}
+                disabled={isLoading}
+                className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-2 rounded-xl text-sm font-bold transition-all disabled:opacity-50"
+              >
+                <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} />
+                Sync
+              </button>
+            </div>
           </div>
         </header>
 

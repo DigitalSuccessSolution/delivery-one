@@ -3,12 +3,14 @@
 import React, { useState, useEffect } from 'react';
 import { Wallet, Plus, Calendar, FileText, ArrowLeft, Loader2, RefreshCw } from 'lucide-react';
 import Link from 'next/link';
+import Papa from 'papaparse';
 import { useRouter } from 'next/navigation';
 
 export default function DashboardClient() {
   const [balance, setBalance] = useState<number | null>(null);
   const [history, setHistory] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [isPolling, setIsPolling] = useState(false);
   
   const [amount, setAmount] = useState('');
   const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
@@ -18,10 +20,12 @@ export default function DashboardClient() {
   
   const router = useRouter();
 
-  const fetchWallet = async () => {
-    setIsLoading(true);
+  const fetchWallet = async (polling = false) => {
+    if (polling) setIsPolling(true);
+    else setIsLoading(true);
+    
     try {
-      const res = await fetch('/api/wallet');
+      const res = await fetch(`/api/wallet?_t=${Date.now()}`);
       const data = await res.json();
       if (data.success) {
         setBalance(data.balance);
@@ -31,11 +35,14 @@ export default function DashboardClient() {
       console.error('Failed to fetch wallet', err);
     } finally {
       setIsLoading(false);
+      setIsPolling(false);
     }
   };
 
   useEffect(() => {
     fetchWallet();
+    const interval = setInterval(() => fetchWallet(true), 10000);
+    return () => clearInterval(interval);
   }, []);
 
   const handleAddFunds = async (e: React.FormEvent) => {
@@ -66,6 +73,29 @@ export default function DashboardClient() {
     } finally {
       setIsSubmitting(false);
     }
+  };
+
+  const exportTransactions = () => {
+    if (!history || history.length === 0) {
+      alert("No transactions to export.");
+      return;
+    }
+
+    const csvData = history.map(row => ({
+      Date: row.date,
+      Amount: row.amount,
+      Remark: row.remark
+    }));
+
+    const csv = Papa.unparse(csvData);
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.setAttribute("href", url);
+    link.setAttribute("download", `admin_wallet_transactions_${new Date().toISOString().split('T')[0]}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
   };
 
   return (
@@ -166,8 +196,9 @@ export default function DashboardClient() {
               <div>
                 <p className="text-sm font-bold text-emerald-400/80 uppercase tracking-wider mb-1">Total Wallet Balance</p>
                 <div className="flex items-baseline gap-2">
-                  <span className="text-5xl font-black text-white tracking-tighter">
+                  <span className="text-5xl font-black text-white tracking-tighter flex items-center gap-3">
                     {isLoading && balance === null ? '...' : `₹${balance?.toLocaleString() || '0'}`}
+                    {(isLoading || isPolling) && balance !== null && <Loader2 className="w-6 h-6 animate-spin text-emerald-500/50" />}
                   </span>
                 </div>
               </div>
@@ -180,6 +211,14 @@ export default function DashboardClient() {
             <div className="bg-slate-900/60 border border-slate-800 rounded-2xl overflow-hidden shadow-xl">
               <div className="p-5 border-b border-slate-800/60 flex items-center justify-between">
                 <h3 className="font-bold text-white text-lg">Transaction History</h3>
+                <button
+                  onClick={exportTransactions}
+                  disabled={history.length === 0}
+                  className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-500 disabled:bg-slate-700 disabled:text-slate-500 text-white px-3 py-1.5 rounded-lg text-xs font-bold transition-colors"
+                >
+                  <FileText className="w-4 h-4" />
+                  Export CSV
+                </button>
               </div>
               <div className="overflow-x-auto">
                 <table className="w-full text-left border-collapse">
