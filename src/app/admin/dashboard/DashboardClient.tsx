@@ -116,7 +116,7 @@ export default function DashboardClient() {
             </div>
           </div>
           <div className="flex items-center gap-4">
-            <button onClick={fetchWallet} className="p-2 bg-slate-900 rounded-xl border border-slate-700 hover:bg-slate-800 transition-colors">
+            <button onClick={() => fetchWallet(false)} className="p-2 bg-slate-900 rounded-xl border border-slate-700 hover:bg-slate-800 transition-colors">
                <RefreshCw className={`w-5 h-5 text-slate-400 ${isLoading ? 'animate-spin' : ''}`} />
             </button>
             <Link href="/" className="flex items-center gap-2 bg-slate-800 hover:bg-slate-700 text-white px-4 py-2 rounded-xl text-sm font-bold transition-all">
