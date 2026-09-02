@@ -11,6 +11,7 @@ export default function Dashboard() {
   const [isLoading, setIsLoading] = useState(true);
   const [isPolling, setIsPolling] = useState(false);
   const [error, setError] = useState('');
+  const [searchQuery, setSearchQuery] = useState('');
   const [isPrivate, setIsPrivate] = useState(false);
   
   // Maps orderId -> { status, instructions, firstAttempt }
@@ -102,8 +103,8 @@ export default function Dashboard() {
             
             if (orderIdMatch) {
               let hasCallPlaced = false;
-              let ofdCount = 0;
               let ofdDate: string | null = null;
+              const ofdDatesSet = new Set<string>();
               
               if (shipment.Status?.Instructions?.toLowerCase().includes('call placed')) hasCallPlaced = true;
               if (shipment.Scans && Array.isArray(shipment.Scans)) {
@@ -118,10 +119,11 @@ export default function Dashboard() {
                   const isScanOFD = (stat === 'dispatched' && type === 'UD');
 
                   if (isScanOFD) {
-                    ofdCount++;
-                    
                     const scanDate = s.ScanDetail?.ScanDateTime || s.ScanDetail?.StatusDateTime;
                     if (scanDate) {
+                      const dateOnly = scanDate.split('T')[0];
+                      ofdDatesSet.add(dateOnly);
+                      
                       if (!ofdDate) {
                         ofdDate = scanDate;
                       } else if (new Date(scanDate) > new Date(ofdDate)) {
@@ -139,14 +141,13 @@ export default function Dashboard() {
               const isCurrentOFD = (currentStat === 'dispatched' && currentType === 'UD');
 
               if (isCurrentOFD) {
-                 if (ofdCount === 0) {
-                   ofdCount = 1;
-                 }
                  const currentStatusDate = shipment.Status?.StatusDateTime || shipment.Status?.ScanDateTime;
                  if (currentStatusDate) {
                    ofdDate = currentStatusDate; // Current status is always the latest
                  }
               }
+              
+              const finalOfdCount = ofdDatesSet.size;
 
               newStatuses[orderIdMatch] = {
                 status: shipment.Status?.Status || 'Unknown',
@@ -154,7 +155,7 @@ export default function Dashboard() {
                 instructions: shipment.Status?.Instructions || '',
                 firstAttempt: shipment.FirstAttemptDate || null,
                 callPlaced: hasCallPlaced,
-                ofdCount: ofdCount,
+                ofdCount: finalOfdCount,
                 ofdDate: ofdDate,
                 rawShipment: shipment
               };
@@ -284,24 +285,40 @@ export default function Dashboard() {
 
   // Filter Data
   const displayedData = sheetData.filter(row => {
-    if (filterStatus === 'ALL') return true;
+    let matchesStatus = false;
+    if (filterStatus === 'ALL') {
+       matchesStatus = true;
+    } else {
+       const statObj = liveStatuses[row._orderId];
+       if (!statObj || !statObj.status) {
+         matchesStatus = filterStatus === 'OTHER';
+       } else {
+         const rawStatus = (statObj.status || '').toLowerCase().trim();
+         const rawType = (statObj.statusType || '').toUpperCase().trim();
+         
+         let mappedStatus = 'OTHER';
+         if (rawStatus === 'dispatched' && rawType === 'UD') mappedStatus = 'OFD';
+         else if (rawStatus === 'in transit' && rawType === 'RT') mappedStatus = 'RTO_IN_TRANSIT';
+         else if (rawStatus === 'delivered' && rawType === 'DL') mappedStatus = 'DELIVERED';
+         else if (rawStatus === 'manifested' && rawType === 'UD') mappedStatus = 'READY_TO_PICKUP';
+         else if (rawStatus === 'in transit' && rawType === 'UD') mappedStatus = 'IN_TRANSIT';
+         else if (rawStatus === 'rto' && rawType === 'DL') mappedStatus = 'RTO_RETURNED';
+         else if (rawStatus.includes('lost') || rawStatus.includes('cancel')) mappedStatus = 'LOST';
+         
+         matchesStatus = mappedStatus === filterStatus;
+       }
+    }
     
-    const statObj = liveStatuses[row._orderId];
-    if (!statObj || !statObj.status) return filterStatus === 'OTHER';
-
-    const rawStatus = (statObj.status || '').toLowerCase().trim();
-    const rawType = (statObj.statusType || '').toUpperCase().trim();
+    let matchesSearch = true;
+    if (searchQuery.trim() !== '') {
+       const q = searchQuery.toLowerCase().trim();
+       // Check if any value in the row object contains the search query
+       matchesSearch = Object.values(row).some((val: any) => 
+           val && val.toString().toLowerCase().includes(q)
+       );
+    }
     
-    let mappedStatus = 'OTHER';
-    if (rawStatus === 'dispatched' && rawType === 'UD') mappedStatus = 'OFD';
-    else if (rawStatus === 'in transit' && rawType === 'RT') mappedStatus = 'RTO_IN_TRANSIT';
-    else if (rawStatus === 'delivered' && rawType === 'DL') mappedStatus = 'DELIVERED';
-    else if (rawStatus === 'manifested' && rawType === 'UD') mappedStatus = 'READY_TO_PICKUP';
-    else if (rawStatus === 'in transit' && rawType === 'UD') mappedStatus = 'IN_TRANSIT';
-    else if (rawStatus === 'rto' && rawType === 'DL') mappedStatus = 'RTO_RETURNED';
-    else if (rawStatus.includes('lost') || rawStatus.includes('cancel')) mappedStatus = 'LOST';
-    
-    return mappedStatus === filterStatus;
+    return matchesStatus && matchesSearch;
   });
 
   const exportToCSV = () => {
@@ -408,7 +425,22 @@ export default function Dashboard() {
             </div>
           </div>
           
-          <div className="flex flex-wrap items-center gap-4">
+          <div className="flex flex-wrap items-center gap-4 flex-1 justify-end">
+            
+            {/* Main Table Search */}
+            <div className="flex items-center gap-2 bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 flex-1 min-w-[200px] md:max-w-[300px]">
+              <Search className="w-4 h-4 text-slate-400" />
+              <input 
+                type="text" 
+                placeholder="Search data..." 
+                value={searchQuery}
+                onChange={e => {
+                  setSearchQuery(e.target.value);
+                  setCurrentPage(1);
+                }}
+                className="bg-transparent text-sm text-slate-200 focus:outline-none w-full"
+              />
+            </div>
             
             {/* Wallet Balance Display */}
             <div className="flex items-center gap-3 bg-emerald-900/20 border border-emerald-500/30 px-4 py-2 rounded-xl">
