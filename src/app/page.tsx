@@ -274,12 +274,23 @@ export default function Dashboard() {
   // Filter Data
   const displayedData = sheetData.filter(row => {
     if (filterStatus === 'ALL') return true;
+    
     const statObj = liveStatuses[row._orderId];
-    const s = statObj?.status || '';
-    if (filterStatus === 'OFD' && s.toLowerCase().includes('out for delivery')) return true;
-    if (filterStatus === 'TRANSIT' && s.toLowerCase().includes('transit')) return true;
-    if (filterStatus === 'OTHER' && !s.toLowerCase().includes('out for delivery') && !s.toLowerCase().includes('transit')) return true;
-    return false;
+    if (!statObj || !statObj.status) return filterStatus === 'OTHER';
+
+    const rawStatus = (statObj.status || '').toLowerCase().trim();
+    const rawType = (statObj.statusType || '').toUpperCase().trim();
+    
+    let mappedStatus = 'OTHER';
+    if (rawStatus === 'dispatched' && rawType === 'UD') mappedStatus = 'OFD';
+    else if (rawStatus === 'in transit' && rawType === 'RT') mappedStatus = 'RTO_IN_TRANSIT';
+    else if (rawStatus === 'delivered' && rawType === 'DL') mappedStatus = 'DELIVERED';
+    else if (rawStatus === 'manifested' && rawType === 'UD') mappedStatus = 'READY_TO_PICKUP';
+    else if (rawStatus === 'in transit' && rawType === 'UD') mappedStatus = 'IN_TRANSIT';
+    else if (rawStatus === 'rto' && rawType === 'DL') mappedStatus = 'RTO_RETURNED';
+    else if (rawStatus.includes('lost') || rawStatus.includes('cancel')) mappedStatus = 'LOST';
+    
+    return mappedStatus === filterStatus;
   });
 
   const totalPages = Math.ceil(displayedData.length / itemsPerPage) || 1;
@@ -344,11 +355,6 @@ export default function Dashboard() {
               </div>
             </div>
 
-            {/* Admin Link */}
-            <Link href="/admin" className="p-2.5 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-xl transition-colors" title="Admin Panel">
-              <Settings className="w-5 h-5 text-slate-400" />
-            </Link>
-            
             {/* Debug Form */}
             <form onSubmit={handleDebugSearch} className="flex items-center gap-2 bg-slate-900 border border-slate-700 rounded-xl px-2 py-1.5">
               <input 
@@ -370,18 +376,23 @@ export default function Dashboard() {
             {/* Filter Dropdown */}
             <div className="flex items-center gap-2 bg-slate-900 border border-slate-700 rounded-xl px-3 py-2">
               <Filter className="w-4 h-4 text-indigo-400" />
-              <select 
-                value={filterStatus} 
+              <select
+                value={filterStatus}
                 onChange={(e) => {
                   setFilterStatus(e.target.value);
                   setCurrentPage(1);
                 }}
                 className="bg-transparent text-sm font-semibold text-slate-200 focus:outline-none"
               >
-                <option className="bg-slate-900 text-slate-200" value="ALL">All Shipments</option>
-                <option className="bg-slate-900 text-slate-200" value="OFD">Out for Delivery Only</option>
-                <option className="bg-slate-900 text-slate-200" value="TRANSIT">In Transit Only</option>
-                <option className="bg-slate-900 text-slate-200" value="OTHER">Other Statuses</option>
+                <option className="bg-slate-900 text-slate-200" value="ALL">All Status</option>
+                <option className="bg-slate-900 text-slate-200" value="OFD">OFD</option>
+                <option className="bg-slate-900 text-slate-200" value="RTO_IN_TRANSIT">RTO In transit</option>
+                <option className="bg-slate-900 text-slate-200" value="DELIVERED">Delivered</option>
+                <option className="bg-slate-900 text-slate-200" value="READY_TO_PICKUP">Ready to Pickup</option>
+                <option className="bg-slate-900 text-slate-200" value="IN_TRANSIT">In transit</option>
+                <option className="bg-slate-900 text-slate-200" value="RTO_RETURNED">RTO- Returned</option>
+                <option className="bg-slate-900 text-slate-200" value="LOST">Lost</option>
+                <option className="bg-slate-900 text-slate-200" value="OTHER">Other</option>
               </select>
             </div>
             
