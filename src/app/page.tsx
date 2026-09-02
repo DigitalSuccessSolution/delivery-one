@@ -1,7 +1,8 @@
 'use client';
 
 import React, { useState, useEffect, useCallback } from 'react';
-import { Package, Search, Truck, Database, AlertCircle, RefreshCw, FileSpreadsheet, Lock, X, Edit2, Filter } from 'lucide-react';
+import { Package, Search, Truck, Database, AlertCircle, RefreshCw, FileSpreadsheet, Lock, X, Edit2, Filter, Wallet, Settings } from 'lucide-react';
+import Link from 'next/link';
 
 export default function Dashboard() {
   const [sheetData, setSheetData] = useState<any[]>([]);
@@ -25,6 +26,20 @@ export default function Dashboard() {
   const [debugInput, setDebugInput] = useState('');
   const [debugJson, setDebugJson] = useState<any | null>(null);
   const [isDebugLoading, setIsDebugLoading] = useState(false);
+
+  // Wallet
+  const [walletBalance, setWalletBalance] = useState<number | null>(null);
+  const fetchWalletBalance = async () => {
+    try {
+      const res = await fetch('/api/wallet');
+      const data = await res.json();
+      if (data.success) {
+        setWalletBalance(data.balance);
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  };
 
   const fetchSheet = async () => {
     setIsLoading(true);
@@ -80,6 +95,7 @@ export default function Dashboard() {
             if (orderIdMatch) {
               let hasCallPlaced = false;
               let ofdCount = 0;
+              let ofdDate: string | null = null;
               
               if (shipment.Status?.Instructions?.toLowerCase().includes('call placed')) hasCallPlaced = true;
               if (shipment.Scans && Array.isArray(shipment.Scans)) {
@@ -87,18 +103,40 @@ export default function Dashboard() {
                   if (s.ScanDetail?.Instructions?.toLowerCase().includes('call placed')) hasCallPlaced = true;
                   
                   const instr = (s.ScanDetail?.Instructions || '').toLowerCase();
-                  const stat = (s.ScanDetail?.Status || '').toLowerCase();
-                  if (instr.includes('out for delivery') || stat.includes('out for delivery')) {
+                  // In ScanDetail, Delhivery uses 'Scan' and 'ScanType'
+                  const stat = (s.ScanDetail?.Scan || s.ScanDetail?.Status || '').toLowerCase().trim();
+                  const type = (s.ScanDetail?.ScanType || s.ScanDetail?.StatusType || '').toUpperCase().trim();
+                  
+                  const isScanOFD = (stat === 'dispatched' && type === 'UD');
+
+                  if (isScanOFD) {
                     ofdCount++;
+                    
+                    const scanDate = s.ScanDetail?.ScanDateTime || s.ScanDetail?.StatusDateTime;
+                    if (scanDate) {
+                      if (!ofdDate) {
+                        ofdDate = scanDate;
+                      } else if (new Date(scanDate) > new Date(ofdDate)) {
+                        ofdDate = scanDate;
+                      }
+                    }
                   }
                 });
               }
               
-              if (ofdCount === 0) {
-                 const instr = (shipment.Status?.Instructions || '').toLowerCase();
-                 const stat = (shipment.Status?.Status || '').toLowerCase();
-                 if (instr.includes('out for delivery') || stat.includes('out for delivery')) {
+              const currentInstr = (shipment.Status?.Instructions || '').toLowerCase();
+              const currentStat = (shipment.Status?.Status || '').toLowerCase().trim();
+              const currentType = (shipment.Status?.StatusType || '').toUpperCase().trim();
+              
+              const isCurrentOFD = (currentStat === 'dispatched' && currentType === 'UD');
+
+              if (isCurrentOFD) {
+                 if (ofdCount === 0) {
                    ofdCount = 1;
+                 }
+                 const currentStatusDate = shipment.Status?.StatusDateTime || shipment.Status?.ScanDateTime;
+                 if (currentStatusDate) {
+                   ofdDate = currentStatusDate; // Current status is always the latest
                  }
               }
 
@@ -109,6 +147,7 @@ export default function Dashboard() {
                 firstAttempt: shipment.FirstAttemptDate || null,
                 callPlaced: hasCallPlaced,
                 ofdCount: ofdCount,
+                ofdDate: ofdDate,
                 rawShipment: shipment
               };
             }
@@ -117,7 +156,7 @@ export default function Dashboard() {
         
         chunk.forEach(id => {
           if (!newStatuses[id]) {
-            newStatuses[id] = { status: 'Not Found/Error', statusType: '', instructions: '', firstAttempt: null, callPlaced: false, ofdCount: 0 };
+            newStatuses[id] = { status: 'Not Found/Error', statusType: '', instructions: '', firstAttempt: null, callPlaced: false, ofdCount: 0, ofdDate: null };
           }
         });
         
@@ -125,7 +164,7 @@ export default function Dashboard() {
       } catch (e) {
         const errorStatuses: Record<string, any> = {};
         chunk.forEach(id => {
-          errorStatuses[id] = { status: 'Error', statusType: '', instructions: '', firstAttempt: null, callPlaced: false, ofdCount: 0 };
+          errorStatuses[id] = { status: 'Error', statusType: '', instructions: '', firstAttempt: null, callPlaced: false, ofdCount: 0, ofdDate: null };
         });
         setLiveStatuses(prev => ({ ...prev, ...errorStatuses }));
       }
@@ -140,6 +179,7 @@ export default function Dashboard() {
   // Run on mount
   useEffect(() => {
     fetchSheet();
+    fetchWalletBalance();
   }, []);
 
   // 10 Second Polling
@@ -169,6 +209,11 @@ export default function Dashboard() {
       const data = await res.json();
       if (!data.success) {
         alert("Failed to update Sheet: " + (data.error || 'Unknown Error. Have you configured APPS_SCRIPT_URL?'));
+      } else {
+        // If discount was updated, refresh the wallet balance to reflect changes in real-time
+        if (updates.discount !== undefined) {
+          fetchWalletBalance();
+        }
       }
     } catch (e) {
       alert("Error updating sheet.");
@@ -286,7 +331,23 @@ export default function Dashboard() {
             </div>
           </div>
           
-          <div className="flex items-center gap-4">
+          <div className="flex flex-wrap items-center gap-4">
+            
+            {/* Wallet Balance Display */}
+            <div className="flex items-center gap-3 bg-emerald-900/20 border border-emerald-500/30 px-4 py-2 rounded-xl">
+              <Wallet className="w-5 h-5 text-emerald-400" />
+              <div>
+                <p className="text-[10px] font-bold text-emerald-400/80 uppercase tracking-wider leading-none">Wallet Balance</p>
+                <p className="text-lg font-black text-emerald-300 leading-none mt-1">
+                  {walletBalance !== null ? `₹${walletBalance.toLocaleString()}` : '...'}
+                </p>
+              </div>
+            </div>
+
+            {/* Admin Link */}
+            <Link href="/admin" className="p-2.5 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-xl transition-colors" title="Admin Panel">
+              <Settings className="w-5 h-5 text-slate-400" />
+            </Link>
             
             {/* Debug Form */}
             <form onSubmit={handleDebugSearch} className="flex items-center gap-2 bg-slate-900 border border-slate-700 rounded-xl px-2 py-1.5">
@@ -390,6 +451,12 @@ export default function Dashboard() {
                               <th className="py-2 px-3 font-bold text-indigo-300 text-[11px] uppercase tracking-wider bg-indigo-900/10 whitespace-nowrap border-r border-slate-800/50">
                                 First Attempt
                               </th>
+                              <th className="py-2 px-3 font-bold text-indigo-300 text-[11px] uppercase tracking-wider bg-indigo-900/10 whitespace-nowrap border-r border-slate-800/50">
+                                OFD Date
+                              </th>
+                              <th className="py-2 px-3 font-bold text-indigo-300 text-[11px] uppercase tracking-wider bg-indigo-900/10 whitespace-nowrap border-r border-slate-800/50 text-center">
+                                AT Count
+                              </th>
                             </>
                           )}
                         </React.Fragment>
@@ -433,11 +500,6 @@ export default function Dashboard() {
                                   className="text-indigo-400 font-bold font-mono text-sm hover:text-indigo-300 transition-colors hover:underline text-left"
                                 >
                                   {row[h] || '-'}
-                                  {typeof liveStatuses[row._orderId]?.ofdCount === 'number' && (
-                                    <span className="text-amber-400 font-bold ml-1">
-                                      - ({liveStatuses[row._orderId].ofdCount})
-                                    </span>
-                                  )}
                                 </button>
                               ) : (
                                 <div className="flex items-center gap-2">
@@ -460,6 +522,16 @@ export default function Dashboard() {
                                 <td className="py-2 px-3 bg-indigo-900/5 border-r border-slate-800/50">
                                   <div className="text-sm font-semibold text-indigo-200 whitespace-nowrap">
                                     {formatDate(liveStatuses[row._orderId]?.firstAttempt) || '-'}
+                                  </div>
+                                </td>
+                                <td className="py-2 px-3 bg-indigo-900/5 border-r border-slate-800/50">
+                                  <div className="text-sm font-semibold text-emerald-300 whitespace-nowrap">
+                                    {formatDate(liveStatuses[row._orderId]?.ofdDate) || '-'}
+                                  </div>
+                                </td>
+                                <td className="py-2 px-3 bg-indigo-900/5 border-r border-slate-800/50 text-center">
+                                  <div className="text-sm font-bold text-amber-400 whitespace-nowrap">
+                                    {typeof liveStatuses[row._orderId]?.ofdCount === 'number' ? liveStatuses[row._orderId].ofdCount : '-'}
                                   </div>
                                 </td>
                               </>

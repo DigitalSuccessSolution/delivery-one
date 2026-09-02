@@ -49,6 +49,10 @@ export async function GET(request: Request) {
       
       // Get the existing Internal Status if any
       newRow._internalStatus = row['Status'] || row['Internal Status'] || '';
+      
+      // Explicitly map Discount and Remark so they show up in inputs
+      newRow.discount = row['Discount'] || '';
+      newRow.remark = row['Remark'] || '';
 
       return newRow;
     }).filter(row => row._orderId && row._orderId.trim() !== ''); 

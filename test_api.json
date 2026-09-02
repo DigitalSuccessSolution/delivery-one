@@ -1,0 +1,5 @@
+﻿{
+  "Success": false,
+  "Error": "Data does not exists for provided Waybill(s)",
+  "rmk": "Some error has occurred. Please contact client.support@delhivery.com with error message- Data does not exists for provided Waybill(s)"
+}
