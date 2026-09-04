@@ -55,9 +55,12 @@ export async function GET(request: Request) {
       };
     });
 
+    // Prevent floating point arithmetic accumulation errors
+    const roundedBalance = Math.round(balance * 100) / 100;
+
     return NextResponse.json({
       success: true,
-      balance,
+      balance: roundedBalance,
       history
     });
     

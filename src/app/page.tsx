@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useCallback } from 'react';
-import { Package, Search, Truck, Database, AlertCircle, RefreshCw, FileSpreadsheet, Lock, X, Edit2, Filter, Wallet, Settings, Loader2 } from 'lucide-react';
+import { Package, Search, Truck, Database, AlertCircle, RefreshCw, FileSpreadsheet, Lock, X, Edit2, Filter, Wallet, Settings, Loader2, Calendar } from 'lucide-react';
 import Link from 'next/link';
 import Papa from 'papaparse';
 
@@ -20,7 +20,7 @@ export default function Dashboard() {
   
   // Pagination
   const [currentPage, setCurrentPage] = useState(1);
-  const itemsPerPage = 100;
+  const [itemsPerPage, setItemsPerPage] = useState(100);
   
   // Modal State
   const [selectedOrder, setSelectedOrder] = useState<any | null>(null);
@@ -85,101 +85,105 @@ export default function Dashboard() {
     
     // Batch into chunks of 50 (Delhivery limit usually 50)
     const chunkSize = 50;
+    const chunks: string[][] = [];
     for (let i = 0; i < orderIds.length; i += chunkSize) {
-      const chunk = orderIds.slice(i, i + chunkSize);
-      
-      try {
-        const res = await fetch(`/api/track?waybill=${encodeURIComponent(chunk.join(','))}`);
-        const data = await res.json();
-        
-        const newStatuses: Record<string, any> = {};
-        
-        if (data.ShipmentData && Array.isArray(data.ShipmentData)) {
-          data.ShipmentData.forEach((item: any) => {
-            const shipment = item.Shipment;
-            if (!shipment) return;
-            
-            const orderIdMatch = chunk.find(id => id === shipment.AWB || id === shipment.ReferenceNo);
-            
-            if (orderIdMatch) {
-              let hasCallPlaced = false;
-              let ofdDate: string | null = null;
-              const ofdDatesSet = new Set<string>();
-              
-              if (shipment.Status?.Instructions?.toLowerCase().includes('call placed')) hasCallPlaced = true;
-              if (shipment.Scans && Array.isArray(shipment.Scans)) {
-                shipment.Scans.forEach((s:any) => {
-                  if (s.ScanDetail?.Instructions?.toLowerCase().includes('call placed')) hasCallPlaced = true;
-                  
-                  const instr = (s.ScanDetail?.Instructions || '').toLowerCase();
-                  // In ScanDetail, Delhivery uses 'Scan' and 'ScanType'
-                  const stat = (s.ScanDetail?.Scan || s.ScanDetail?.Status || '').toLowerCase().trim();
-                  const type = (s.ScanDetail?.ScanType || s.ScanDetail?.StatusType || '').toUpperCase().trim();
-                  
-                  const isScanOFD = (stat === 'dispatched' && type === 'UD');
-
-                  if (isScanOFD) {
-                    const scanDate = s.ScanDetail?.ScanDateTime || s.ScanDetail?.StatusDateTime;
-                    if (scanDate) {
-                      const dateOnly = scanDate.split('T')[0];
-                      ofdDatesSet.add(dateOnly);
-                      
-                      if (!ofdDate) {
-                        ofdDate = scanDate;
-                      } else if (new Date(scanDate) > new Date(ofdDate)) {
-                        ofdDate = scanDate;
-                      }
-                    }
-                  }
-                });
-              }
-              
-              const currentInstr = (shipment.Status?.Instructions || '').toLowerCase();
-              const currentStat = (shipment.Status?.Status || '').toLowerCase().trim();
-              const currentType = (shipment.Status?.StatusType || '').toUpperCase().trim();
-              
-              const isCurrentOFD = (currentStat === 'dispatched' && currentType === 'UD');
-
-              if (isCurrentOFD) {
-                 const currentStatusDate = shipment.Status?.StatusDateTime || shipment.Status?.ScanDateTime;
-                 if (currentStatusDate) {
-                   ofdDate = currentStatusDate; // Current status is always the latest
-                 }
-              }
-              
-              const finalOfdCount = ofdDatesSet.size;
-
-              newStatuses[orderIdMatch] = {
-                status: shipment.Status?.Status || 'Unknown',
-                statusType: shipment.Status?.StatusType || '',
-                instructions: shipment.Status?.Instructions || '',
-                firstAttempt: shipment.FirstAttemptDate || null,
-                callPlaced: hasCallPlaced,
-                ofdCount: finalOfdCount,
-                ofdDate: ofdDate,
-                rawShipment: shipment
-              };
-            }
-          });
-        }
-        
-        chunk.forEach(id => {
-          if (!newStatuses[id]) {
-            newStatuses[id] = { status: 'Not Found/Error', statusType: '', instructions: '', firstAttempt: null, callPlaced: false, ofdCount: 0, ofdDate: null };
-          }
-        });
-        
-        setLiveStatuses(prev => ({ ...prev, ...newStatuses }));
-      } catch (e) {
-        const errorStatuses: Record<string, any> = {};
-        chunk.forEach(id => {
-          errorStatuses[id] = { status: 'Error', statusType: '', instructions: '', firstAttempt: null, callPlaced: false, ofdCount: 0, ofdDate: null };
-        });
-        setLiveStatuses(prev => ({ ...prev, ...errorStatuses }));
-      }
+      chunks.push(orderIds.slice(i, i + chunkSize));
     }
     
-    setIsPolling(false);
+    try {
+      const newStatuses: Record<string, any> = {};
+
+      await Promise.all(
+        chunks.map(async (chunk) => {
+          try {
+            const res = await fetch(`/api/track?waybill=${encodeURIComponent(chunk.join(','))}`);
+            const data = await res.json();
+            
+            if (data.ShipmentData && Array.isArray(data.ShipmentData)) {
+              data.ShipmentData.forEach((item: any) => {
+                const shipment = item.Shipment;
+                if (!shipment) return;
+                
+                const orderIdMatch = chunk.find(id => id === shipment.AWB || id === shipment.ReferenceNo);
+                
+                if (orderIdMatch) {
+                  let hasCallPlaced = false;
+                  let ofdDate: string | null = null;
+                  const ofdDatesSet = new Set<string>();
+                  
+                  if (shipment.Status?.Instructions?.toLowerCase().includes('call placed')) hasCallPlaced = true;
+                  if (shipment.Scans && Array.isArray(shipment.Scans)) {
+                    shipment.Scans.forEach((s:any) => {
+                      if (s.ScanDetail?.Instructions?.toLowerCase().includes('call placed')) hasCallPlaced = true;
+                      
+                      const stat = (s.ScanDetail?.Scan || s.ScanDetail?.Status || '').toLowerCase().trim();
+                      const type = (s.ScanDetail?.ScanType || s.ScanDetail?.StatusType || '').toUpperCase().trim();
+                      
+                      const isScanOFD = (stat === 'dispatched' && type === 'UD');
+
+                      if (isScanOFD) {
+                        const scanDate = s.ScanDetail?.ScanDateTime || s.ScanDetail?.StatusDateTime;
+                        if (scanDate) {
+                          const dateOnly = scanDate.split('T')[0];
+                          ofdDatesSet.add(dateOnly);
+                          
+                          if (!ofdDate) {
+                            ofdDate = scanDate;
+                          } else if (new Date(scanDate) > new Date(ofdDate)) {
+                            ofdDate = scanDate;
+                          }
+                        }
+                      }
+                    });
+                  }
+                  
+                  const currentStat = (shipment.Status?.Status || '').toLowerCase().trim();
+                  const currentType = (shipment.Status?.StatusType || '').toUpperCase().trim();
+                  
+                  const isCurrentOFD = (currentStat === 'dispatched' && currentType === 'UD');
+
+                  if (isCurrentOFD) {
+                     const currentStatusDate = shipment.Status?.StatusDateTime || shipment.Status?.ScanDateTime;
+                     if (currentStatusDate) {
+                       ofdDate = currentStatusDate;
+                     }
+                  }
+                  
+                  const finalOfdCount = ofdDatesSet.size;
+
+                  newStatuses[orderIdMatch] = {
+                    status: shipment.Status?.Status || 'Unknown',
+                    statusType: shipment.Status?.StatusType || '',
+                    instructions: shipment.Status?.Instructions || '',
+                    firstAttempt: shipment.FirstAttemptDate || null,
+                    callPlaced: hasCallPlaced,
+                    ofdCount: finalOfdCount,
+                    ofdDate: ofdDate,
+                    rawShipment: shipment
+                  };
+                }
+              });
+            }
+            
+            chunk.forEach(id => {
+              if (!newStatuses[id]) {
+                newStatuses[id] = { status: 'Not Found/Error', statusType: '', instructions: '', firstAttempt: null, callPlaced: false, ofdCount: 0, ofdDate: null };
+              }
+            });
+          } catch (e) {
+            chunk.forEach(id => {
+              newStatuses[id] = { status: 'Error', statusType: '', instructions: '', firstAttempt: null, callPlaced: false, ofdCount: 0, ofdDate: null };
+            });
+          }
+        })
+      );
+      
+      setLiveStatuses(prev => ({ ...prev, ...newStatuses }));
+    } catch (e) {
+      console.error('Batch status error:', e);
+    } finally {
+      setIsPolling(false);
+    }
   };
 
   const fetchAllStatuses = (data: any[]) => {
@@ -193,20 +197,23 @@ export default function Dashboard() {
     fetchWalletBalance();
   }, []);
 
-  // 10 Second Polling
+  // Stable string representation of order IDs to prevent polling restarts on input typing
+  const orderIdsKey = sheetData.map(r => r._orderId).filter(Boolean).join(',');
+
+  // 10 Second Polling - decoupled from sheetData mutation so input keystrokes do NOT re-trigger network requests
   useEffect(() => {
-    if (sheetData.length === 0) return;
+    if (!orderIdsKey) return;
     
-    // Initial fetch when sheetData is first populated
-    fetchAllStatuses(sheetData);
+    const idsList = orderIdsKey.split(',').filter(Boolean);
+    fetchBatchStatuses(idsList);
     
     const interval = setInterval(() => {
-      fetchAllStatuses(sheetData);
+      fetchBatchStatuses(idsList);
       fetchWalletBalance();
     }, 10000);
     
     return () => clearInterval(interval);
-  }, [sheetData]);
+  }, [orderIdsKey]);
 
   const handleUpdate = async (orderId: string, updates: any) => {
     // Optimistic UI update
@@ -284,79 +291,94 @@ export default function Dashboard() {
   };
 
   // Filter Data
-  const displayedData = sheetData.filter(row => {
-    let matchesStatus = false;
-    if (filterStatus === 'ALL') {
-       matchesStatus = true;
-    } else {
-       const statObj = liveStatuses[row._orderId];
-       if (!statObj || !statObj.status) {
-         matchesStatus = filterStatus === 'OTHER';
-       } else {
-         const rawStatus = (statObj.status || '').toLowerCase().trim();
-         const rawType = (statObj.statusType || '').toUpperCase().trim();
-         
-         let mappedStatus = 'OTHER';
-         if (rawStatus === 'dispatched' && rawType === 'UD') mappedStatus = 'OFD';
-         else if (rawStatus === 'in transit' && rawType === 'RT') mappedStatus = 'RTO_IN_TRANSIT';
-         else if (rawStatus === 'delivered' && rawType === 'DL') mappedStatus = 'DELIVERED';
-         else if (rawStatus === 'manifested' && rawType === 'UD') mappedStatus = 'READY_TO_PICKUP';
-         else if (rawStatus === 'in transit' && rawType === 'UD') mappedStatus = 'IN_TRANSIT';
-         else if (rawStatus === 'rto' && rawType === 'DL') mappedStatus = 'RTO_RETURNED';
-         else if (rawStatus.includes('lost') || rawStatus.includes('cancel')) mappedStatus = 'LOST';
-         
-         matchesStatus = mappedStatus === filterStatus;
-       }
-    }
-    
-    let matchesSearch = true;
-    if (searchQuery.trim() !== '') {
-       const q = searchQuery.toLowerCase().trim();
-       // Check if any value in the row object contains the search query
-       matchesSearch = Object.values(row).some((val: any) => 
-           val && val.toString().toLowerCase().includes(q)
-       );
-    }
-    
-    return matchesStatus && matchesSearch;
-  });
+  const displayedData = React.useMemo(() => {
+    return sheetData.filter(row => {
+      let matchesStatus = false;
+      if (filterStatus === 'ALL') {
+         matchesStatus = true;
+      } else {
+         const statObj = liveStatuses[row._orderId];
+         if (!statObj || !statObj.status) {
+           matchesStatus = filterStatus === 'OTHER';
+         } else {
+           const rawStatus = (statObj.status || '').toLowerCase().trim();
+           const rawType = (statObj.statusType || '').toUpperCase().trim();
+           
+           let mappedStatus = 'OTHER';
+           if (rawStatus === 'dispatched' && rawType === 'UD') mappedStatus = 'OFD';
+           else if (rawStatus === 'in transit' && rawType === 'RT') mappedStatus = 'RTO_IN_TRANSIT';
+           else if (rawStatus === 'delivered' && rawType === 'DL') mappedStatus = 'DELIVERED';
+           else if (rawStatus === 'manifested' && rawType === 'UD') mappedStatus = 'READY_TO_PICKUP';
+           else if (rawStatus === 'in transit' && rawType === 'UD') mappedStatus = 'IN_TRANSIT';
+           else if (rawStatus === 'rto' && rawType === 'DL') mappedStatus = 'RTO_RETURNED';
+           else if (rawStatus.includes('lost') || rawStatus.includes('cancel')) mappedStatus = 'LOST';
+           
+           matchesStatus = mappedStatus === filterStatus;
+         }
+      }
+      
+      let matchesSearch = true;
+      if (searchQuery.trim() !== '') {
+         const q = searchQuery.toLowerCase().trim();
+         // Check if any value in the row object contains the search query
+         matchesSearch = Object.values(row).some((val: any) => 
+             val && val.toString().toLowerCase().includes(q)
+         );
+      }
+      
+      return matchesStatus && matchesSearch;
+    });
+  }, [sheetData, liveStatuses, filterStatus, searchQuery]);
 
   const exportToCSV = () => {
     const exportData = displayedData.map(row => {
       const newRow: Record<string, any> = {};
-      
-      // Standard headers
-      headers.slice(0, 8).forEach(h => {
-         newRow[h] = row[h];
-      });
-      
       const statObj = liveStatuses[row._orderId];
-      newRow['Tracking Status'] = statObj?.status || '';
+      const dates = getOrderDates(row, statObj);
+
+      // 1. Export ALL original Google Sheet headers (table + popup headers)
+      headers.forEach(h => {
+        if (!h || h.trim() === '') return;
+        const keyLower = h.toLowerCase().trim();
+        
+        if (keyLower === 'discount') {
+          newRow[h] = row.discount !== undefined ? row.discount : (row._popupData?.[h] || row[h] || '');
+        } else if (keyLower === 'remark') {
+          newRow[h] = row.remark !== undefined ? row.remark : (row._popupData?.[h] || row[h] || '');
+        } else if (keyLower === 'internal status' || keyLower === 'status') {
+          newRow[h] = row._internalStatus !== undefined ? row._internalStatus : (row._popupData?.[h] || row[h] || '');
+        } else if (row.hasOwnProperty(h)) {
+          newRow[h] = row[h];
+        } else if (row._popupData && row._popupData.hasOwnProperty(h)) {
+          newRow[h] = row._popupData[h];
+        } else {
+          newRow[h] = row[h] || '';
+        }
+      });
+
+      // 2. Export Live Tracking & Logistics details (from table & popup)
+      newRow['Delhivery Status'] = statObj?.status || '';
       newRow['Tracking Instructions'] = statObj?.instructions || '';
       newRow['First Attempt'] = formatDate(statObj?.firstAttempt) || '';
       newRow['OFD Date'] = formatDate(statObj?.ofdDate) || '';
       newRow['AT Count'] = statObj?.ofdCount || 0;
-      
-      // Popup data
-      const popupKeys = Object.keys(row._popupData || {});
-      popupKeys.forEach(k => {
-         if (k.trim() === '') return; // Skip empty header columns
-         if (!newRow.hasOwnProperty(k)) {
-            // Use dynamically edited values if they exist, otherwise fallback to original sheet data
-            const keyLower = k.toLowerCase().trim();
-            if (keyLower === 'discount') {
-               newRow[k] = row.discount !== undefined ? row.discount : row._popupData[k];
-            } else if (keyLower === 'remark') {
-               newRow[k] = row.remark !== undefined ? row.remark : row._popupData[k];
-            } else if (keyLower === 'internal status' || keyLower === 'status') {
-               newRow[k] = row._internalStatus !== undefined ? row._internalStatus : row._popupData[k];
-            } else {
-               newRow[k] = row._popupData[k];
-            }
-         }
-      });
-      
-      // Just in case these columns didn't exist in the sheet at all
+      newRow['Pickup Date'] = formatDate(dates.pickupDate) || '';
+      newRow['Expected Delivery Date'] = formatDate(dates.expectedDeliveryDate) || '';
+      newRow['Delivered Date'] = formatDate(dates.deliveryDate) || '';
+      newRow['Destination'] = statObj?.rawShipment?.Destination || '';
+      newRow['Current Location'] = statObj?.rawShipment?.Status?.StatusLocation || '';
+      newRow['Call Placed'] = statObj?.callPlaced ? 'Yes' : 'No';
+
+      // 3. Any additional popup data keys not in headers
+      if (row._popupData) {
+        Object.keys(row._popupData).forEach(k => {
+          if (k && k.trim() !== '' && !newRow.hasOwnProperty(k)) {
+            newRow[k] = row._popupData[k];
+          }
+        });
+      }
+
+      // 4. Ensure Discount, Remark, Internal Status exist
       if (!newRow.hasOwnProperty('Discount')) newRow['Discount'] = row.discount || '';
       if (!newRow.hasOwnProperty('Remark')) newRow['Remark'] = row.remark || '';
       if (!newRow.hasOwnProperty('Internal Status')) newRow['Internal Status'] = row._internalStatus || '';
@@ -369,7 +391,7 @@ export default function Dashboard() {
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.setAttribute("href", url);
-    link.setAttribute("download", `ofd_export_${new Date().toISOString().split('T')[0]}.csv`);
+    link.setAttribute("download", `ofd_complete_export_${new Date().toISOString().split('T')[0]}.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -386,6 +408,58 @@ export default function Dashboard() {
     } catch (e) {
       return dateStr;
     }
+  };
+
+  const getOrderDates = (row: any, liveStatus: any) => {
+    if (!row) return { pickupDate: null, deliveryDate: null, expectedDeliveryDate: null };
+    const raw = liveStatus?.rawShipment || {};
+    
+    // 1. Pickup Date
+    let pickupDate = raw.PickUpDate || raw.PickupDate || raw.PickedupDate || raw.PickUpDateTime || raw.PickUpLocationDate || null;
+    if (!pickupDate && raw.Scans && Array.isArray(raw.Scans)) {
+      const pScan = raw.Scans.find((s: any) => {
+        const stat = (s.ScanDetail?.Scan || s.ScanDetail?.Status || '').toLowerCase();
+        return stat.includes('picked') || stat.includes('pickup') || stat.includes('dispatched');
+      });
+      if (pScan) {
+        pickupDate = pScan.ScanDetail?.ScanDateTime || pScan.ScanDetail?.StatusDateTime || null;
+      }
+    }
+    if (!pickupDate) {
+      const pKey = Object.keys(row || {}).find(k => k.toLowerCase().includes('pickup'));
+      if (pKey) pickupDate = row[pKey];
+    }
+
+    // 2. Delivery Date / Expected Delivery Date
+    let deliveryDate = raw.DeliveryDate || raw.DeliveredDate || raw.ActualDeliveryDate || null;
+    let expectedDeliveryDate = raw.ExpectedDeliveryDate || raw.EDD || raw.PromisedDeliveryDate || null;
+    
+    const isDelivered = (liveStatus?.status || raw.Status?.Status || '').toLowerCase().includes('delivered');
+    if (isDelivered && !deliveryDate) {
+      deliveryDate = raw.Status?.StatusDateTime || raw.Status?.ScanDateTime || null;
+      if (!deliveryDate && raw.Scans && Array.isArray(raw.Scans)) {
+        const dScan = raw.Scans.find((s: any) => (s.ScanDetail?.Scan || s.ScanDetail?.Status || '').toLowerCase().includes('delivered'));
+        if (dScan) deliveryDate = dScan.ScanDetail?.ScanDateTime || dScan.ScanDetail?.StatusDateTime || null;
+      }
+    }
+
+    if (!deliveryDate) {
+      const dKey = Object.keys(row || {}).find(k => {
+        const kl = k.toLowerCase();
+        return kl.includes('delivery date') || kl.includes('delivered date');
+      });
+      if (dKey) deliveryDate = row[dKey];
+    }
+
+    if (!expectedDeliveryDate) {
+      const eddKey = Object.keys(row || {}).find(k => {
+        const kl = k.toLowerCase();
+        return kl.includes('edd') || kl.includes('expected delivery');
+      });
+      if (eddKey) expectedDeliveryDate = row[eddKey];
+    }
+
+    return { pickupDate, deliveryDate, expectedDeliveryDate };
   };
 
   const handleDebugSearch = async (e: React.FormEvent) => {
@@ -708,9 +782,27 @@ export default function Dashboard() {
             </div>
             
             <div className="bg-slate-900/60 p-4 border-t border-slate-800/50 flex flex-col md:flex-row justify-between items-center gap-4 w-full">
-              <span className="text-xs font-medium text-slate-500">
-                Showing {paginatedData.length} of {displayedData.length} records
-              </span>
+              <div className="flex flex-wrap items-center gap-4">
+                <span className="text-xs font-medium text-slate-400">
+                  Showing <span className="text-indigo-400 font-bold">{paginatedData.length}</span> of <span className="text-indigo-400 font-bold">{displayedData.length}</span> records
+                </span>
+                <div className="flex items-center gap-2 bg-slate-900/90 border border-slate-700/60 px-3 py-1 rounded-xl">
+                  <span className="text-xs font-semibold text-slate-400">Rows per page:</span>
+                  <select
+                    value={itemsPerPage}
+                    onChange={(e) => {
+                      setItemsPerPage(Number(e.target.value));
+                      setCurrentPage(1);
+                    }}
+                    className="bg-transparent text-xs font-bold text-indigo-300 focus:outline-none cursor-pointer"
+                  >
+                    <option className="bg-slate-900 text-slate-200" value={25}>25</option>
+                    <option className="bg-slate-900 text-slate-200" value={50}>50</option>
+                    <option className="bg-slate-900 text-slate-200" value={100}>100</option>
+                    <option className="bg-slate-900 text-slate-200" value={500}>500</option>
+                  </select>
+                </div>
+              </div>
               
               <div className="flex items-center gap-2">
                 <button 
@@ -747,109 +839,147 @@ export default function Dashboard() {
         )}
 
         {/* Modal Popup */}
-        {selectedOrder && (
-          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-            <div className="bg-[#0a0f1d] border border-slate-700 rounded-2xl w-full max-w-2xl shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-200">
-              <div className="flex items-center justify-between p-5 border-b border-slate-800">
-                <div>
-                  <h3 className="text-xl font-bold text-white">Order Details</h3>
-                  <p className="text-sm font-mono text-indigo-400 mt-1">{selectedOrder._orderId}</p>
+        {selectedOrder && (() => {
+          const liveStat = liveStatuses[selectedOrder._orderId];
+          const dates = getOrderDates(selectedOrder, liveStat);
+          const orderDateKey = Object.keys(selectedOrder).find(k => k.toLowerCase() === 'order date');
+          const productKey = Object.keys(selectedOrder).find(k => k.toLowerCase() === 'product');
+
+          return (
+            <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+              <div className="bg-[#0a0f1d] border border-slate-700 rounded-2xl w-full max-w-2xl shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+                <div className="flex items-center justify-between p-5 border-b border-slate-800 bg-slate-900/60">
+                  <div>
+                    <h3 className="text-xl font-bold text-white flex items-center gap-2">
+                      <Package className="w-5 h-5 text-indigo-400" /> Order Details
+                    </h3>
+                    <p className="text-sm font-mono text-indigo-400 mt-1">ID: {selectedOrder._orderId}</p>
+                  </div>
+                  <button onClick={() => setSelectedOrder(null)} className="p-2 hover:bg-slate-800 rounded-xl text-slate-400 transition-colors">
+                    <X className="w-6 h-6" />
+                  </button>
                 </div>
-                <button onClick={() => setSelectedOrder(null)} className="p-2 hover:bg-slate-800 rounded-xl text-slate-400 transition-colors">
-                  <X className="w-6 h-6" />
-                </button>
-              </div>
-              
-              <div className="p-6 max-h-[70vh] overflow-y-auto">
-                {selectedOrder && liveStatuses[selectedOrder._orderId]?.rawShipment && (
-                  <div className="mb-6 bg-indigo-900/20 border border-indigo-500/30 rounded-xl p-5 shadow-lg">
-                    <h4 className="text-lg font-bold text-indigo-300 mb-4 flex items-center gap-2 border-b border-indigo-500/20 pb-3">
-                      <Truck className="w-5 h-5" /> Live Tracking Details
+                
+                <div className="p-6 max-h-[70vh] overflow-y-auto space-y-6">
+                  
+                  {/* Top Highlight Card for Dates & Core Logistics Info */}
+                  <div className="bg-gradient-to-br from-indigo-950/40 via-slate-900 to-slate-900 border border-indigo-500/30 rounded-xl p-5 shadow-lg relative overflow-hidden">
+                    <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-indigo-500 via-purple-500 to-emerald-500"></div>
+                    <h4 className="text-sm font-bold text-indigo-300 uppercase tracking-wider mb-4 flex items-center gap-2 border-b border-indigo-500/20 pb-2">
+                      <Truck className="w-4 h-4 text-indigo-400" /> Key Dates & Logistics Overview
                     </h4>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-                      {/* Sheet Data injected at the top of modal */}
-                      {Object.keys(selectedOrder).find(k => k.toLowerCase() === 'order date') && (
-                        <div>
-                          <p className="text-[10px] font-bold text-emerald-400/70 uppercase tracking-wider mb-1">Order Date</p>
-                          <p className="text-lg font-bold text-emerald-100">{formatDate(selectedOrder[Object.keys(selectedOrder).find(k => k.toLowerCase() === 'order date') as string])}</p>
+                    
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      
+                      {/* Order Date */}
+                      {orderDateKey && selectedOrder[orderDateKey] && (
+                        <div className="bg-slate-900/80 p-3 rounded-xl border border-slate-800">
+                          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Order Date</p>
+                          <p className="text-base font-bold text-slate-100">{formatDate(selectedOrder[orderDateKey])}</p>
                         </div>
                       )}
-                      {Object.keys(selectedOrder).find(k => k.toLowerCase() === 'product') && (
-                        <div>
-                          <p className="text-[10px] font-bold text-emerald-400/70 uppercase tracking-wider mb-1">Product</p>
-                          <p className="text-lg font-bold text-emerald-100 truncate" title={selectedOrder[Object.keys(selectedOrder).find(k => k.toLowerCase() === 'product') as string]}>
-                            {selectedOrder[Object.keys(selectedOrder).find(k => k.toLowerCase() === 'product') as string]}
+
+                      {/* Product */}
+                      {productKey && selectedOrder[productKey] && (
+                        <div className="bg-slate-900/80 p-3 rounded-xl border border-slate-800">
+                          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Product</p>
+                          <p className="text-base font-bold text-slate-100 truncate" title={selectedOrder[productKey]}>
+                            {selectedOrder[productKey]}
                           </p>
                         </div>
                       )}
-                      
-                      {liveStatuses[selectedOrder._orderId].rawShipment.PickUpDate && (
-                        <div>
-                          <p className="text-[10px] font-bold text-indigo-400/70 uppercase tracking-wider mb-1">Pickup Date</p>
-                          <p className="text-lg font-bold text-indigo-100">{formatDate(liveStatuses[selectedOrder._orderId].rawShipment.PickUpDate)}</p>
-                        </div>
-                      )}
-                      {liveStatuses[selectedOrder._orderId].rawShipment.ExpectedDeliveryDate && (
-                        <div>
-                          <p className="text-[10px] font-bold text-indigo-400/70 uppercase tracking-wider mb-1">Expected Delivery</p>
-                          <p className="text-lg font-bold text-indigo-100">{formatDate(liveStatuses[selectedOrder._orderId].rawShipment.ExpectedDeliveryDate)}</p>
-                        </div>
-                      )}
-                      {liveStatuses[selectedOrder._orderId].rawShipment.Destination && (
-                        <div>
-                          <p className="text-[10px] font-bold text-indigo-400/70 uppercase tracking-wider mb-1">Destination</p>
-                          <p className="text-base font-bold text-indigo-100">{liveStatuses[selectedOrder._orderId].rawShipment.Destination}</p>
-                        </div>
-                      )}
-                      {liveStatuses[selectedOrder._orderId].rawShipment.Status?.StatusLocation && (
-                        <div>
-                          <p className="text-[10px] font-bold text-indigo-400/70 uppercase tracking-wider mb-1">Current Location</p>
-                          <p className="text-base font-bold text-indigo-100">{liveStatuses[selectedOrder._orderId].rawShipment.Status.StatusLocation}</p>
-                        </div>
-                      )}
-                      {liveStatuses[selectedOrder._orderId].rawShipment.Status?.Instructions && (
-                        <div className="col-span-1 md:col-span-2 bg-indigo-950/40 p-3 rounded-lg border border-indigo-500/20 mt-2">
-                          <p className="text-[10px] font-bold text-indigo-400/70 uppercase tracking-wider mb-1">Latest Instructions</p>
-                          <p className="text-base font-bold text-indigo-100">{liveStatuses[selectedOrder._orderId].rawShipment.Status.Instructions}</p>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                )}
-                
-                <h4 className="text-sm font-bold text-slate-400 mb-4 flex items-center gap-2">
-                  <Database className="w-4 h-4" /> Sheet Data
-                </h4>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  
-                  {Object.entries(selectedOrder._popupData).map(([key, value]) => {
-                    if(!key) return null;
-                    return (
-                      <div key={key} className="bg-slate-900/50 p-3 rounded-xl border border-slate-800">
-                        <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">{key}</p>
-                        <p className="text-sm text-slate-200 font-medium break-words">
-                          {value ? String(value) : '-'}
+
+                      {/* Pickup Date */}
+                      <div className="bg-slate-900/80 p-3 rounded-xl border border-indigo-500/20">
+                        <p className="text-[10px] font-bold text-indigo-400 uppercase tracking-wider mb-1 flex items-center gap-1">
+                          <Calendar className="w-3 h-3 text-indigo-400" /> Pickup Date
+                        </p>
+                        <p className="text-base font-bold text-indigo-200">
+                          {dates.pickupDate ? formatDate(dates.pickupDate) : <span className="text-slate-500 text-xs font-medium">Not Available</span>}
                         </p>
                       </div>
-                    )
-                  })}
 
-                  {Object.keys(selectedOrder._popupData).length === 0 && (
-                    <div className="col-span-2 text-center text-slate-500 py-4">
-                      No additional columns found in the sheet.
+                      {/* Delivery Date or Expected Delivery Date */}
+                      {dates.deliveryDate ? (
+                        <div className="bg-emerald-950/30 p-3 rounded-xl border border-emerald-500/30">
+                          <p className="text-[10px] font-bold text-emerald-400 uppercase tracking-wider mb-1 flex items-center gap-1">
+                            <Calendar className="w-3 h-3 text-emerald-400" /> Delivered Date
+                          </p>
+                          <p className="text-base font-bold text-emerald-200">
+                            {formatDate(dates.deliveryDate)}
+                          </p>
+                        </div>
+                      ) : (
+                        <div className="bg-slate-900/80 p-3 rounded-xl border border-slate-800">
+                          <p className="text-[10px] font-bold text-amber-400 uppercase tracking-wider mb-1 flex items-center gap-1">
+                            <Calendar className="w-3 h-3 text-amber-400" /> Expected Delivery
+                          </p>
+                          <p className="text-base font-bold text-amber-200">
+                            {dates.expectedDeliveryDate ? formatDate(dates.expectedDeliveryDate) : <span className="text-slate-500 text-xs font-medium">Pending / N/A</span>}
+                          </p>
+                        </div>
+                      )}
+
+                      {/* Destination */}
+                      {liveStat?.rawShipment?.Destination && (
+                        <div className="bg-slate-900/80 p-3 rounded-xl border border-slate-800">
+                          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Destination</p>
+                          <p className="text-sm font-bold text-slate-200">{liveStat.rawShipment.Destination}</p>
+                        </div>
+                      )}
+
+                      {/* Current Location */}
+                      {liveStat?.rawShipment?.Status?.StatusLocation && (
+                        <div className="bg-slate-900/80 p-3 rounded-xl border border-slate-800">
+                          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Current Location</p>
+                          <p className="text-sm font-bold text-slate-200">{liveStat.rawShipment.Status.StatusLocation}</p>
+                        </div>
+                      )}
+
                     </div>
-                  )}
 
+                    {/* Latest Instructions */}
+                    {liveStat?.rawShipment?.Status?.Instructions && (
+                      <div className="mt-4 bg-slate-950/60 p-3 rounded-xl border border-indigo-500/20">
+                        <p className="text-[10px] font-bold text-indigo-400 uppercase tracking-wider mb-1">Latest Instructions</p>
+                        <p className="text-sm font-semibold text-indigo-100">{liveStat.rawShipment.Status.Instructions}</p>
+                      </div>
+                    )}
+                  </div>
+
+                  <h4 className="text-sm font-bold text-slate-400 mb-3 flex items-center gap-2">
+                    <Database className="w-4 h-4" /> Sheet Data
+                  </h4>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {Object.entries(selectedOrder._popupData || {}).map(([key, value]) => {
+                      if (!key) return null;
+                      return (
+                        <div key={key} className="bg-slate-900/50 p-3 rounded-xl border border-slate-800">
+                          <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">{key}</p>
+                          <p className="text-sm text-slate-200 font-medium break-words">
+                            {value ? String(value) : '-'}
+                          </p>
+                        </div>
+                      );
+                    })}
+
+                    {Object.keys(selectedOrder._popupData || {}).length === 0 && (
+                      <div className="col-span-2 text-center text-slate-500 py-4">
+                        No additional columns found in the sheet.
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                <div className="p-4 bg-slate-900 border-t border-slate-800 flex justify-end">
+                  <button onClick={() => setSelectedOrder(null)} className="bg-indigo-600 hover:bg-indigo-500 px-6 py-2 rounded-xl font-bold text-white transition-colors">
+                    Close
+                  </button>
                 </div>
               </div>
-              <div className="p-4 bg-slate-900 border-t border-slate-800 flex justify-end">
-                <button onClick={() => setSelectedOrder(null)} className="bg-indigo-600 hover:bg-indigo-500 px-6 py-2 rounded-xl font-bold text-white transition-colors">
-                  Close
-                </button>
-              </div>
             </div>
-          </div>
-        )}
+          );
+        })()}
 
         {/* Debug JSON Modal */}
         {debugJson && (
