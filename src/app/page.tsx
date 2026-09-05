@@ -239,6 +239,27 @@ export default function Dashboard() {
     }
   };
 
+  const getDisplayStatusText = (s: any) => {
+    if (!s || s.status === 'Not Found' || s.status === 'Error') return 'Error/Not Found';
+    if (!s.status) return 'Fetching...';
+
+    const rawStatus = (s.status || '').toLowerCase().trim();
+    const rawType = (s.statusType || '').toUpperCase().trim();
+    
+    if (rawStatus === 'dispatched' && rawType === 'UD') return 'OFD';
+    if ((rawStatus === 'in transit' || rawStatus === 'dispatched' || rawStatus === 'pending') && rawType === 'RT') return 'RTO In transit';
+    if (rawStatus === 'delivered' && rawType === 'DL') return 'Delivered';
+    if (rawStatus === 'manifested' && rawType === 'UD') return 'Ready to Pickup';
+    if ((rawStatus === 'in transit' || rawStatus === 'pending') && rawType === 'UD') return 'In transit';
+    if (rawStatus === 'rto' && rawType === 'DL') return 'RTO- Returned';
+    if (rawStatus.includes('lost') || rawStatus.includes('cancel')) return 'Lost';
+    if (rawStatus.includes('not picked')) return 'Not Picked';
+    if (rawStatus.includes('pending')) return 'Pending';
+
+    return s.status;
+  };
+
+
   const getStatusBadge = (s: any) => {
     if (!s || s.status === 'Not Found' || s.status === 'Error') {
       return <span className="flex items-center gap-1.5 text-slate-400 text-xs font-semibold whitespace-nowrap"><RefreshCw className="w-3 h-3 animate-spin" /> Fetching/Error...</span>;
@@ -365,7 +386,7 @@ export default function Dashboard() {
       });
 
       // 2. Export Live Tracking & Logistics details (from table & popup)
-      newRow['Delhivery Status'] = statObj?.status || '';
+      newRow['Delhivery Status'] = statObj ? getDisplayStatusText(statObj) : '';
       newRow['Tracking Instructions'] = statObj?.instructions || '';
       newRow['First Attempt'] = formatDate(statObj?.firstAttempt) || '';
       newRow['OFD Date'] = formatDate(statObj?.ofdDate) || '';
