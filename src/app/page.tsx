@@ -256,7 +256,7 @@ export default function Dashboard() {
     if (rawStatus === 'dispatched' && rawType === 'UD') {
       displayStatus = 'OFD';
       badgeColor = "bg-indigo-500/10 text-indigo-400 border-indigo-500/20";
-    } else if (rawStatus === 'in transit' && rawType === 'RT') {
+    } else if ((rawStatus === 'in transit' || rawStatus === 'dispatched') && rawType === 'RT') {
       displayStatus = 'RTO In transit';
       badgeColor = "bg-orange-500/10 text-orange-400 border-orange-500/20";
     } else if (rawStatus === 'delivered' && rawType === 'DL') {
@@ -265,7 +265,7 @@ export default function Dashboard() {
     } else if (rawStatus === 'manifested' && rawType === 'UD') {
       displayStatus = 'Ready to Pickup';
       badgeColor = "bg-blue-500/10 text-blue-400 border-blue-500/20";
-    } else if (rawStatus === 'in transit' && rawType === 'UD') {
+    } else if ((rawStatus === 'in transit' || rawStatus === 'pending') && rawType === 'UD') {
       displayStatus = 'In transit';
       badgeColor = "bg-amber-500/10 text-amber-400 border-amber-500/20";
     } else if (rawStatus === 'rto' && rawType === 'DL') {
@@ -306,10 +306,10 @@ export default function Dashboard() {
            
            let mappedStatus = 'OTHER';
            if (rawStatus === 'dispatched' && rawType === 'UD') mappedStatus = 'OFD';
-           else if (rawStatus === 'in transit' && rawType === 'RT') mappedStatus = 'RTO_IN_TRANSIT';
+           else if ((rawStatus === 'in transit' || rawStatus === 'dispatched') && rawType === 'RT') mappedStatus = 'RTO_IN_TRANSIT';
            else if (rawStatus === 'delivered' && rawType === 'DL') mappedStatus = 'DELIVERED';
            else if (rawStatus === 'manifested' && rawType === 'UD') mappedStatus = 'READY_TO_PICKUP';
-           else if (rawStatus === 'in transit' && rawType === 'UD') mappedStatus = 'IN_TRANSIT';
+           else if ((rawStatus === 'in transit' || rawStatus === 'pending') && rawType === 'UD') mappedStatus = 'IN_TRANSIT';
            else if (rawStatus === 'rto' && rawType === 'DL') mappedStatus = 'RTO_RETURNED';
            else if (rawStatus.includes('lost') || rawStatus.includes('cancel')) mappedStatus = 'LOST';
            
