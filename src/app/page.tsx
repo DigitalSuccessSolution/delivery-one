@@ -256,7 +256,7 @@ export default function Dashboard() {
     if (rawStatus === 'dispatched' && rawType === 'UD') {
       displayStatus = 'OFD';
       badgeColor = "bg-indigo-500/10 text-indigo-400 border-indigo-500/20";
-    } else if ((rawStatus === 'in transit' || rawStatus === 'dispatched') && rawType === 'RT') {
+    } else if ((rawStatus === 'in transit' || rawStatus === 'dispatched' || rawStatus === 'pending') && rawType === 'RT') {
       displayStatus = 'RTO In transit';
       badgeColor = "bg-orange-500/10 text-orange-400 border-orange-500/20";
     } else if (rawStatus === 'delivered' && rawType === 'DL') {
@@ -312,7 +312,7 @@ export default function Dashboard() {
            
            let mappedStatus = 'OTHER';
            if (rawStatus === 'dispatched' && rawType === 'UD') mappedStatus = 'OFD';
-           else if ((rawStatus === 'in transit' || rawStatus === 'dispatched') && rawType === 'RT') mappedStatus = 'RTO_IN_TRANSIT';
+           else if ((rawStatus === 'in transit' || rawStatus === 'dispatched' || rawStatus === 'pending') && rawType === 'RT') mappedStatus = 'RTO_IN_TRANSIT';
            else if (rawStatus === 'delivered' && rawType === 'DL') mappedStatus = 'DELIVERED';
            else if (rawStatus === 'manifested' && rawType === 'UD') mappedStatus = 'READY_TO_PICKUP';
            else if ((rawStatus === 'in transit' || rawStatus === 'pending') && rawType === 'UD') mappedStatus = 'IN_TRANSIT';
