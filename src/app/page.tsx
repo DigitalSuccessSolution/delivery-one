@@ -274,6 +274,12 @@ export default function Dashboard() {
     } else if (rawStatus.includes('lost') || rawStatus.includes('cancel')) {
       displayStatus = 'Lost';
       badgeColor = "bg-red-900/40 text-red-400 border-red-500/30";
+    } else if (rawStatus.includes('not picked')) {
+      displayStatus = 'Not Picked';
+      badgeColor = "bg-pink-500/10 text-pink-400 border-pink-500/20";
+    } else if (rawStatus.includes('pending')) {
+      displayStatus = 'Pending';
+      badgeColor = "bg-slate-600/40 text-slate-300 border-slate-500/30";
     } else {
       // Fallback
       if (rawStatus.includes('out for delivery') || rawStatus.includes('delivered')) {
@@ -312,6 +318,8 @@ export default function Dashboard() {
            else if ((rawStatus === 'in transit' || rawStatus === 'pending') && rawType === 'UD') mappedStatus = 'IN_TRANSIT';
            else if (rawStatus === 'rto' && rawType === 'DL') mappedStatus = 'RTO_RETURNED';
            else if (rawStatus.includes('lost') || rawStatus.includes('cancel')) mappedStatus = 'LOST';
+           else if (rawStatus.includes('not picked')) mappedStatus = 'NOT_PICKED';
+           else if (rawStatus.includes('pending')) mappedStatus = 'PENDING';
            
            matchesStatus = mappedStatus === filterStatus;
          }
@@ -565,6 +573,8 @@ export default function Dashboard() {
                 <option className="bg-slate-900 text-slate-200" value="IN_TRANSIT">In transit</option>
                 <option className="bg-slate-900 text-slate-200" value="RTO_RETURNED">RTO- Returned</option>
                 <option className="bg-slate-900 text-slate-200" value="LOST">Lost</option>
+                <option className="bg-slate-900 text-slate-200" value="NOT_PICKED">Not Picked</option>
+                <option className="bg-slate-900 text-slate-200" value="PENDING">Pending</option>
                 <option className="bg-slate-900 text-slate-200" value="OTHER">Other</option>
               </select>
             </div>
