@@ -18,6 +18,10 @@ export default function Dashboard() {
   const [liveStatuses, setLiveStatuses] = useState<Record<string, any>>({});
   const [filterStatus, setFilterStatus] = useState<string>('ALL');
   
+  // Column Filters
+  const [columnFilters, setColumnFilters] = useState<Record<string, string>>({});
+  const [activeFilterCol, setActiveFilterCol] = useState<string | null>(null);
+
   // Pagination
   const [currentPage, setCurrentPage] = useState(1);
   const [itemsPerPage, setItemsPerPage] = useState(100);
@@ -200,7 +204,7 @@ export default function Dashboard() {
   // Stable string representation of order IDs to prevent polling restarts on input typing
   const orderIdsKey = sheetData.map(r => r._orderId).filter(Boolean).join(',');
 
-  // 10 Second Polling - decoupled from sheetData mutation so input keystrokes do NOT re-trigger network requests
+  // 3 Minute Polling - prevent Delhivery 403 Rate Limit Blocks
   useEffect(() => {
     if (!orderIdsKey) return;
     
@@ -210,7 +214,7 @@ export default function Dashboard() {
     const interval = setInterval(() => {
       fetchBatchStatuses(idsList);
       fetchWalletBalance();
-    }, 10000);
+    }, 180000); // Changed to 3 minutes to avoid getting blocked by Delhivery
     
     return () => clearInterval(interval);
   }, [orderIdsKey]);
@@ -229,8 +233,8 @@ export default function Dashboard() {
       if (!data.success) {
         alert("Failed to update Sheet: " + (data.error || 'Unknown Error. Have you configured APPS_SCRIPT_URL?'));
       } else {
-        // If discount was updated, refresh the wallet balance to reflect changes in real-time
-        if (updates.discount !== undefined) {
+        // If discount or dbPayment was updated, refresh the wallet balance to reflect changes in real-time
+        if (updates.discount !== undefined || updates.dbPayment !== undefined) {
           fetchWalletBalance();
         }
       }
@@ -317,6 +321,66 @@ export default function Dashboard() {
     );
   };
 
+  const renderFilterIcon = (colName: string, isDate: boolean = false) => {
+    const isActive = !!columnFilters[colName];
+    const isOpen = activeFilterCol === colName;
+    
+    return (
+      <div className="inline-block ml-1 relative z-50">
+        <button 
+          onClick={(e) => {
+             e.stopPropagation();
+             setActiveFilterCol(isOpen ? null : colName);
+          }}
+          className={`p-0.5 rounded hover:bg-slate-700 transition-colors ${isActive ? 'text-emerald-400' : 'text-slate-500'}`}
+          title={`Filter ${colName}`}
+        >
+          <Filter className="w-3 h-3" />
+        </button>
+        {isOpen && (
+          <div 
+            className="absolute top-full mt-1 left-0 bg-slate-800 border border-slate-700 rounded-lg shadow-2xl p-3 min-w-[200px]"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex justify-between items-center mb-3">
+              <span className="text-[11px] font-bold text-slate-300 uppercase tracking-wider">Filter {colName}</span>
+              <button onClick={() => setActiveFilterCol(null)} className="text-slate-400 hover:text-white p-1 rounded hover:bg-slate-700 transition-colors"><X className="w-3 h-3"/></button>
+            </div>
+            <input 
+              type={isDate ? "date" : "text"}
+              value={columnFilters[colName] || ''}
+              onChange={(e) => setColumnFilters(prev => ({...prev, [colName]: e.target.value}))}
+              className={`w-full bg-[#0a0f1d] border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 ${isDate ? '[color-scheme:dark]' : ''}`}
+              placeholder={`Search in ${colName}...`}
+              autoFocus
+            />
+            <div className="flex justify-end mt-3 gap-2">
+              <button 
+                onClick={() => {
+                  setColumnFilters(prev => {
+                    const newF = {...prev};
+                    delete newF[colName];
+                    return newF;
+                  });
+                  setActiveFilterCol(null);
+                }}
+                className="text-xs text-red-400 hover:text-red-300 hover:bg-red-400/10 px-2 py-1 rounded transition-colors"
+              >
+                Clear
+              </button>
+              <button 
+                onClick={() => setActiveFilterCol(null)}
+                className="text-xs bg-indigo-600 hover:bg-indigo-500 text-white px-3 py-1 rounded transition-colors shadow-lg"
+              >
+                Apply
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
+
   // Filter Data
   const displayedData = React.useMemo(() => {
     return sheetData.filter(row => {
@@ -355,9 +419,44 @@ export default function Dashboard() {
          );
       }
       
-      return matchesStatus && matchesSearch;
+      let matchesColumnFilters = true;
+      for (const [col, filterVal] of Object.entries(columnFilters)) {
+        if (!filterVal) continue;
+        
+        let cellVal = '';
+        const statObj = liveStatuses[row._orderId];
+        
+        if (col === 'Delhivery Status') cellVal = getDisplayStatusText(statObj) || '';
+        else if (col === 'Instructions') cellVal = statObj?.instructions || '';
+        else if (col === 'First Attempt') cellVal = statObj?.firstAttempt ? statObj.firstAttempt.split('T')[0] : '';
+        else if (col === 'OFD Date') cellVal = statObj?.ofdDate ? statObj.ofdDate.split('T')[0] : '';
+        else if (col === 'AT Count') cellVal = String(statObj?.ofdCount ?? '');
+        else if (col === 'Discount') cellVal = String(row.discount || '');
+        else if (col === 'DB Payment') cellVal = String(row.dbPayment || '');
+        else if (col === 'Remark') cellVal = row.remark || '';
+        else if (col === 'Internal Status') cellVal = row._internalStatus || '';
+        else {
+           cellVal = String(row[col] || '');
+        }
+
+        const filterLower = filterVal.toLowerCase().trim();
+        
+        if (col === 'First Attempt' || col === 'OFD Date' || col.toLowerCase().includes('date')) {
+            if (!cellVal.toLowerCase().includes(filterLower)) {
+                matchesColumnFilters = false;
+                break;
+            }
+        } else {
+            if (!cellVal.toLowerCase().includes(filterLower)) {
+                matchesColumnFilters = false;
+                break;
+            }
+        }
+      }
+      
+      return matchesStatus && matchesSearch && matchesColumnFilters;
     });
-  }, [sheetData, liveStatuses, filterStatus, searchQuery]);
+  }, [sheetData, liveStatuses, filterStatus, searchQuery, columnFilters]);
 
   const exportToCSV = () => {
     const exportData = displayedData.map(row => {
@@ -372,6 +471,8 @@ export default function Dashboard() {
         
         if (keyLower === 'discount') {
           newRow[h] = row.discount !== undefined ? row.discount : (row._popupData?.[h] || row[h] || '');
+        } else if (keyLower === 'db payment' || keyLower === 'db_payment') {
+          newRow[h] = row.dbPayment !== undefined ? row.dbPayment : (row._popupData?.[h] || row[h] || '');
         } else if (keyLower === 'remark') {
           newRow[h] = row.remark !== undefined ? row.remark : (row._popupData?.[h] || row[h] || '');
         } else if (keyLower === 'internal status' || keyLower === 'status') {
@@ -381,9 +482,14 @@ export default function Dashboard() {
         } else if (row._popupData && row._popupData.hasOwnProperty(h)) {
           newRow[h] = row._popupData[h];
         } else {
-          newRow[h] = row[h] || '';
+          newRow[h] = '';
         }
       });
+
+      // Explicitly ensure 'DB Payment' is in the export even if missing from Google Sheet headers
+      if (!headers.some(h => (h || '').toLowerCase().trim() === 'db payment')) {
+        newRow['DB Payment'] = row.dbPayment !== undefined ? row.dbPayment : '';
+      }
 
       // 2. Export Live Tracking & Logistics details (from table & popup)
       newRow['Delhivery Status'] = statObj ? getDisplayStatusText(statObj) : '';
@@ -415,7 +521,16 @@ export default function Dashboard() {
       return newRow;
     });
 
-    const csv = Papa.unparse(exportData);
+    // Extract ALL unique keys to ensure no column is missed (Papa.unparse only checks the first row by default)
+    const allKeys = new Set<string>();
+    exportData.forEach(row => {
+      Object.keys(row).forEach(k => allKeys.add(k));
+    });
+
+    const csv = Papa.unparse({
+      fields: Array.from(allKeys),
+      data: exportData
+    });
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
@@ -509,7 +624,7 @@ export default function Dashboard() {
 
   return (
     <div className="min-h-screen bg-[#020617] text-slate-200 p-4 md:p-8 font-sans">
-      <div className="max-w-[1600px] mx-auto space-y-8">
+      <div className="max-w-[1600px] mx-auto space-y-8 relative z-10">
         
         {/* Header */}
         <header className="flex flex-col md:flex-row md:items-center justify-between gap-6 pb-6 border-b border-slate-800/60">
@@ -522,7 +637,7 @@ export default function Dashboard() {
                 Logistics Command Center
               </h1>
               <p className="text-slate-400 mt-1.5 text-sm font-medium flex items-center gap-2">
-                Google Sheets Sync <span className="w-1 h-1 bg-slate-600 rounded-full"></span> Live 10s Delhivery Polling
+                Google Sheets Sync <span className="w-1 h-1 bg-slate-600 rounded-full"></span> Live 3m Delhivery Polling
                 {isPolling && <RefreshCw className="w-3 h-3 text-indigo-400 animate-spin ml-1" />}
               </p>
             </div>
@@ -652,35 +767,60 @@ export default function Dashboard() {
         {/* Data Table */}
         {!error && !isLoading && sheetData.length > 0 && (
           <div className="bg-slate-900/40 backdrop-blur-md rounded-2xl overflow-hidden border border-slate-800/60 shadow-2xl relative">
-            <div className="overflow-x-auto">
+            <div className="overflow-x-auto min-h-[350px]">
               <table className="w-full text-left border-collapse min-w-[1200px]">
                 <thead>
                   <tr className="bg-slate-900/80 border-b border-slate-700/50">
                     <th className="py-2 px-3 font-bold text-indigo-400 text-xs uppercase tracking-wider bg-indigo-900/10 border-r border-slate-800/50 shadow-inner">
-                      Delhivery Status
+                      <div className="flex items-center">
+                        Delhivery Status
+                        {renderFilterIcon('Delhivery Status')}
+                      </div>
                     </th>
                     {headers.map((h, i) => {
                       const hLower = (h || '').toLowerCase();
                       if (hLower.includes('order date') || hLower.includes('product')) return null;
                       
+                      let thClasses = "py-2 px-3 font-semibold text-slate-400 text-[11px] uppercase tracking-wider";
+                      if (hLower.includes('received') || hLower.includes('cod') || hLower.includes('price') || hLower.includes('number')) {
+                        thClasses += " w-[80px] max-w-[80px] leading-tight";
+                      } else {
+                        thClasses += " whitespace-nowrap";
+                      }
+                      
                       return (
                         <React.Fragment key={i}>
-                          <th className="py-2 px-3 font-semibold text-slate-400 text-[11px] uppercase tracking-wider whitespace-nowrap">
-                            {h || `Column ${i+1}`}
+                          <th className={thClasses}>
+                            <div className="flex items-center justify-between gap-1 flex-wrap">
+                              <span>{h || `Column ${i+1}`}</span>
+                              {renderFilterIcon(h || `Column ${i+1}`, (h || '').toLowerCase().includes('date'))}
+                            </div>
                           </th>
                           {i === 0 && (
                             <>
                               <th className="py-2 px-3 font-bold text-indigo-300 text-[11px] uppercase tracking-wider bg-indigo-900/10 whitespace-nowrap">
-                                Instructions
+                                <div className="flex items-center">
+                                  Instructions
+                                  {renderFilterIcon('Instructions')}
+                                </div>
                               </th>
                               <th className="py-2 px-3 font-bold text-indigo-300 text-[11px] uppercase tracking-wider bg-indigo-900/10 whitespace-nowrap border-r border-slate-800/50">
-                                First Attempt
+                                <div className="flex items-center">
+                                  First Attempt
+                                  {renderFilterIcon('First Attempt', true)}
+                                </div>
                               </th>
                               <th className="py-2 px-3 font-bold text-indigo-300 text-[11px] uppercase tracking-wider bg-indigo-900/10 whitespace-nowrap border-r border-slate-800/50">
-                                OFD Date
+                                <div className="flex items-center">
+                                  OFD Date
+                                  {renderFilterIcon('OFD Date', true)}
+                                </div>
                               </th>
                               <th className="py-2 px-3 font-bold text-indigo-300 text-[11px] uppercase tracking-wider bg-indigo-900/10 whitespace-nowrap border-r border-slate-800/50 text-center">
-                                AT Count
+                                <div className="flex items-center justify-center">
+                                  AT Count
+                                  {renderFilterIcon('AT Count')}
+                                </div>
                               </th>
                             </>
                           )}
@@ -688,13 +828,28 @@ export default function Dashboard() {
                       );
                     })}
                     <th className="py-2 px-3 font-bold text-amber-400 text-[11px] uppercase tracking-wider bg-slate-900/40 border-l border-slate-800/50 text-center w-[100px]">
-                      Discount
+                      <div className="flex items-center justify-center">
+                        Discount
+                        {renderFilterIcon('Discount')}
+                      </div>
+                    </th>
+                    <th className="py-2 px-3 font-bold text-cyan-400 text-[11px] uppercase tracking-wider bg-slate-900/40 border-l border-slate-800/50 text-center w-[100px]">
+                      <div className="flex items-center justify-center">
+                        DB Payment
+                        {renderFilterIcon('DB Payment')}
+                      </div>
                     </th>
                     <th className="py-2 px-3 font-bold text-amber-400 text-[11px] uppercase tracking-wider bg-slate-900/40 border-l border-slate-800/50 text-center w-[150px]">
-                      Remark
+                      <div className="flex items-center justify-center">
+                        Remark
+                        {renderFilterIcon('Remark')}
+                      </div>
                     </th>
                     <th className="py-2 px-3 font-bold text-emerald-400 text-[11px] uppercase tracking-wider bg-emerald-900/10 border-l border-slate-800/50 text-center">
-                      Internal Status
+                      <div className="flex items-center justify-center">
+                        Internal Status
+                        {renderFilterIcon('Internal Status')}
+                      </div>
                     </th>
                   </tr>
                 </thead>
@@ -778,12 +933,23 @@ export default function Dashboard() {
 
                       <td className="py-2 px-3 border-l border-slate-800/50 bg-slate-900/20">
                         <input 
-                          type="text"
+                          type="number"
+                          value={row.dbPayment || ''}
+                          onChange={(e) => setSheetData(prev => prev.map(r => r._orderId === row._orderId ? { ...r, dbPayment: e.target.value } : r))}
+                          onBlur={(e) => handleUpdate(row._orderId, { dbPayment: e.target.value })}
+                          placeholder="DB Amount"
+                          className="w-full bg-[#0a0f1d] border border-slate-700 rounded-lg text-sm text-slate-300 p-1.5 focus:ring-1 focus:ring-cyan-500 outline-none"
+                        />
+                      </td>
+
+                      <td className="py-2 px-3 border-l border-slate-800/50 bg-slate-900/20">
+                        <textarea 
+                          rows={1}
                           value={row.remark || ''}
                           onChange={(e) => setSheetData(prev => prev.map(r => r._orderId === row._orderId ? { ...r, remark: e.target.value } : r))}
                           onBlur={(e) => handleUpdate(row._orderId, { remark: e.target.value })}
                           placeholder="Remark..."
-                          className="w-full bg-[#0a0f1d] border border-slate-700 rounded-lg text-sm text-slate-300 p-1.5 focus:ring-1 focus:ring-amber-500 outline-none"
+                          className="w-full bg-[#0a0f1d] border border-slate-700 rounded-lg text-sm text-slate-300 p-1.5 focus:ring-1 focus:ring-amber-500 outline-none resize-y min-h-[34px] max-h-[200px]"
                         />
                       </td>
 

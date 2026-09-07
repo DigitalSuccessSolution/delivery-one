@@ -50,9 +50,10 @@ export async function GET(request: Request) {
       // Get the existing Internal Status if any
       newRow._internalStatus = row['Status'] || row['Internal Status'] || '';
       
-      // Explicitly map Discount and Remark so they show up in inputs
+      // Explicitly map Discount, Remark and DB Payment so they show up in inputs
       newRow.discount = row['Discount'] || '';
       newRow.remark = row['Remark'] || '';
+      newRow.dbPayment = row['DB Payment'] || row['DB payment'] || row['db_payment'] || '';
 
       return newRow;
     }).filter(row => row._orderId && row._orderId.trim() !== ''); 

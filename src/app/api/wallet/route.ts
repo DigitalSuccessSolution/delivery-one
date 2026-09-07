@@ -43,7 +43,7 @@ export async function GET(request: Request) {
       const actionBy = row['Action By'] || '';
 
       if (orderId) {
-        remark = `Order: ${orderId} | By: ${actionBy}`;
+        remark = `${remark ? remark + ' - ' : ''}Order: ${orderId} | By: ${actionBy}`;
       } else if (actionBy && actionBy !== 'Admin') {
         remark = `${remark} | By: ${actionBy}`;
       }
