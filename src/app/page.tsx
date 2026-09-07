@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useCallback } from 'react';
-import { Package, Search, Truck, Database, AlertCircle, RefreshCw, FileSpreadsheet, Lock, X, Edit2, Filter, Wallet, Settings, Loader2, Calendar } from 'lucide-react';
+import { Package, Search, Truck, Database, AlertCircle, RefreshCw, FileSpreadsheet, Lock, X, Edit2, Filter, Wallet, Settings, Loader2, Calendar, Power } from 'lucide-react';
 import Link from 'next/link';
 import Papa from 'papaparse';
 
@@ -13,6 +13,7 @@ export default function Dashboard() {
   const [error, setError] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
   const [isPrivate, setIsPrivate] = useState(false);
+  const [isServerActive, setIsServerActive] = useState(true);
   
   // Maps orderId -> { status, instructions, firstAttempt }
   const [liveStatuses, setLiveStatuses] = useState<Record<string, any>>({});
@@ -206,7 +207,7 @@ export default function Dashboard() {
 
   // 3 Minute Polling - prevent Delhivery 403 Rate Limit Blocks
   useEffect(() => {
-    if (!orderIdsKey) return;
+    if (!orderIdsKey || !isServerActive) return;
     
     const idsList = orderIdsKey.split(',').filter(Boolean);
     fetchBatchStatuses(idsList);
@@ -217,7 +218,7 @@ export default function Dashboard() {
     }, 180000); // Changed to 3 minutes to avoid getting blocked by Delhivery
     
     return () => clearInterval(interval);
-  }, [orderIdsKey]);
+  }, [orderIdsKey, isServerActive]);
 
   const handleUpdate = async (orderId: string, updates: any) => {
     // Optimistic UI update
@@ -637,7 +638,12 @@ export default function Dashboard() {
                 Logistics Command Center
               </h1>
               <p className="text-slate-400 mt-1.5 text-sm font-medium flex items-center gap-2">
-                Google Sheets Sync <span className="w-1 h-1 bg-slate-600 rounded-full"></span> Live 3m Delhivery Polling
+                Google Sheets Sync <span className="w-1 h-1 bg-slate-600 rounded-full"></span> 
+                {isServerActive ? (
+                  <span className="text-emerald-400 flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span> Live API Server ON</span>
+                ) : (
+                  <span className="text-red-400 flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-red-400"></span> Live API Server OFF</span>
+                )}
                 {isPolling && <RefreshCw className="w-3 h-3 text-indigo-400 animate-spin ml-1" />}
               </p>
             </div>
@@ -716,6 +722,14 @@ export default function Dashboard() {
             </div>
             
             <div className="flex items-center gap-2">
+              <button 
+                onClick={() => setIsServerActive(!isServerActive)}
+                className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold transition-all border ${isServerActive ? 'bg-red-900/20 text-red-400 border-red-500/30 hover:bg-red-900/40' : 'bg-emerald-900/20 text-emerald-400 border-emerald-500/30 hover:bg-emerald-900/40'}`}
+              >
+                <Power className="w-4 h-4" />
+                {isServerActive ? 'Stop Server' : 'Start Server'}
+              </button>
+              
               <button 
                 onClick={exportToCSV}
                 className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-500 text-white px-4 py-2 rounded-xl text-sm font-bold transition-all disabled:opacity-50"
@@ -839,16 +853,16 @@ export default function Dashboard() {
                         {renderFilterIcon('DB Payment')}
                       </div>
                     </th>
-                    <th className="py-2 px-3 font-bold text-amber-400 text-[11px] uppercase tracking-wider bg-slate-900/40 border-l border-slate-800/50 text-center w-[150px]">
-                      <div className="flex items-center justify-center">
-                        Remark
-                        {renderFilterIcon('Remark')}
-                      </div>
-                    </th>
                     <th className="py-2 px-3 font-bold text-emerald-400 text-[11px] uppercase tracking-wider bg-emerald-900/10 border-l border-slate-800/50 text-center">
                       <div className="flex items-center justify-center">
                         Internal Status
                         {renderFilterIcon('Internal Status')}
+                      </div>
+                    </th>
+                    <th className="py-2 px-3 font-bold text-amber-400 text-[11px] uppercase tracking-wider bg-slate-900/40 border-l border-slate-800/50 text-center w-[150px]">
+                      <div className="flex items-center justify-center">
+                        Remark
+                        {renderFilterIcon('Remark')}
                       </div>
                     </th>
                   </tr>
@@ -943,17 +957,6 @@ export default function Dashboard() {
                       </td>
 
                       <td className="py-2 px-3 border-l border-slate-800/50 bg-slate-900/20">
-                        <textarea 
-                          rows={1}
-                          value={row.remark || ''}
-                          onChange={(e) => setSheetData(prev => prev.map(r => r._orderId === row._orderId ? { ...r, remark: e.target.value } : r))}
-                          onBlur={(e) => handleUpdate(row._orderId, { remark: e.target.value })}
-                          placeholder="Remark..."
-                          className="w-full bg-[#0a0f1d] border border-slate-700 rounded-lg text-sm text-slate-300 p-1.5 focus:ring-1 focus:ring-amber-500 outline-none resize-y min-h-[34px] max-h-[200px]"
-                        />
-                      </td>
-
-                      <td className="py-2 px-3 border-l border-slate-800/50 bg-slate-900/20">
                         <select 
                           value={row._internalStatus || ''}
                           onChange={(e) => handleUpdate(row._orderId, { _internalStatus: e.target.value })}
@@ -967,6 +970,17 @@ export default function Dashboard() {
                           <option className="bg-slate-900 text-slate-200" value="Delay">Delay</option>
                           <option className="bg-slate-900 text-slate-200" value="reschedule">Reschedule</option>
                         </select>
+                      </td>
+
+                      <td className="py-2 px-3 border-l border-slate-800/50 bg-slate-900/20">
+                        <textarea 
+                          rows={1}
+                          value={row.remark || ''}
+                          onChange={(e) => setSheetData(prev => prev.map(r => r._orderId === row._orderId ? { ...r, remark: e.target.value } : r))}
+                          onBlur={(e) => handleUpdate(row._orderId, { remark: e.target.value })}
+                          placeholder="Remark..."
+                          className="w-full bg-[#0a0f1d] border border-slate-700 rounded-lg text-sm text-slate-300 p-1.5 focus:ring-1 focus:ring-amber-500 outline-none resize-y min-h-[34px] max-h-[200px]"
+                        />
                       </td>
 
                     </tr>
