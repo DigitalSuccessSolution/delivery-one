@@ -153,8 +153,7 @@ export default function Dashboard() {
                        ofdDate = currentStatusDate;
                      }
                   }
-                  
-                  const finalOfdCount = ofdDatesSet.size;
+                  const finalOfdCount = Math.max(0, ofdDatesSet.size - 1);
 
                   newStatuses[orderIdMatch] = {
                     status: shipment.Status?.Status || 'Unknown',
